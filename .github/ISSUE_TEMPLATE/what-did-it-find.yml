@@ -1,0 +1,30 @@
+name: What did it find? (or what did it get wrong?)
+description: Tell us what yare-doctor showed on your Mac, or where it was wrong.
+labels: ["report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying it. Please don't paste anything private: the `--share` line is counts only and safe to paste.
+  - type: textarea
+    id: output
+    attributes:
+      label: The `--share` line (or `--watch 60 --share`)
+      placeholder: "Yare doctor v0.2.0: 14 cores, 36 GB. Agents: claude 2. Builds: ..."
+    validations:
+      required: true
+  - type: dropdown
+    id: agents
+    attributes:
+      label: How many coding agents do you usually run at once?
+      options: ["1", "2", "3", "4 or more"]
+  - type: textarea
+    id: slow
+    attributes:
+      label: When your agents are working, what is the slowest thing your Mac does?
+      description: One sentence is plenty. It helps us decide what to build.
+  - type: textarea
+    id: wrong
+    attributes:
+      label: Did it miss or misflag anything?
+      description: The process name (not the full command) is enough.
