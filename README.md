@@ -2,6 +2,13 @@
 
 A small, read-only script that shows what your coding agents are running on your Mac, and whether their builds are running at the same time as yours.
 
+**Install** (optional; or just download the one file and run it with `bash`):
+
+```sh
+brew install yare-org/tap/yare-doctor
+yare-doctor --watch 60
+```
+
 ```sh
 bash yare-doctor.sh                 # one snapshot, run it while your agents are working
 bash yare-doctor.sh --watch 60      # sample for a minute: how often did an agent's build overlap yours?
