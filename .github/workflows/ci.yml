@@ -21,6 +21,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: bash 3.2 (the one that ships with macOS)
         run: /bin/bash yare-doctor.sh --selftest --no-color
+      - name: generated detection test (about 1,100 command lines) and random process trees
+        run: |
+          python3 tests/matrix.py yare-doctor.sh
+          python3 tests/forest.py 1 60 yare-doctor.sh
       - name: a run on an idle runner must not crash
         run: |
           /bin/bash yare-doctor.sh --no-color > /dev/null
