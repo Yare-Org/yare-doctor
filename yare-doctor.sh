@@ -6,7 +6,7 @@
 #
 # What it does that Activity Monitor does not: it follows the parent chain of every process, so it can say which agent
 # session started what, how much of the Mac each session is holding, who is using the CPU, and what was left behind.
-VERSION="0.2.0"; RELEASED="2026-11-08"
+VERSION="0.2.1"; RELEASED="2026-11-08"
 set -u
 # cron and launchd start scripts with almost no environment: make sure HOME and the system tool folders exist
 if [ -z "${HOME:-}" ]; then HOME=$(dscl . -read "/Users/$(id -un)" NFSHomeDirectory 2>/dev/null | awk '{ print $2 }'); HOME=${HOME:-/var/root}; export HOME; fi
@@ -237,14 +237,20 @@ scan() {
     }
     return 0
   }
-  function agentname(low,   t, n, b, a, i, k, w, tok, rest) {
-    # The Claude desktop app runs Claude Code from its own copy inside an app bundle:
-    # .../Application Support/Claude/claude-code/2.1.317/<hash>/claude.app/Contents/MacOS/claude (the path has a space in it).
-    i = index(low, "/claude.app/contents/macos/claude")
-    if (i && substr(low, 1, i - 1) ~ /\/claude-code\/[0-9][^\/]*\/[^\/]+$/) {
-      rest = substr(low, i + 33); split(rest, t, " ")
-      if (nonsession(t[1]) || daemonargs(low)) return ""
-      return "claude"
+  function agentname(low,   t, n, b, a, i, k, w, tok, rest, bp) {
+    # Some agents run from a bundle of their own (an .app with the same name as the program) inside a versioned folder:
+    #   .../Application Support/Claude/claude-code/2.1.317/<hash>/claude.app/Contents/MacOS/claude   (the Claude desktop app runs this)
+    #   ~/.local/share/junie/versions/3110.7/Applications/junie.app/Contents/MacOS/junie
+    # These are the agent itself, not a desktop app. (The paths can contain spaces, so the line is not split on spaces here.)
+    i = index(low, ".app/contents/macos/")
+    if (i && (low ~ /\/versions\// || low ~ /\/claude-code\/[0-9]/)) {
+      rest = substr(low, i + 20); split(rest, t, " "); tok = t[1]
+      n = split(substr(low, 1, i - 1), bp, "/")
+      if (canon(tok) != "" && bp[n] == tok) {
+        rest = substr(rest, length(tok) + 2); split(rest, t, " ")
+        if (nonsession(t[1]) || daemonargs(low)) return ""
+        return canon(tok)
+      }
     }
     if (index(low, ".app/contents/macos/")) return ""
     n = split(low, t, " "); b = base(exe0(low)); a = ""
@@ -1401,6 +1407,11 @@ EOF
   det junie         'node /opt/homebrew/bin/junie --resume'
   det jules         '/Users/me/.local/bin/jules'
   det -             'grok --version'
+  det junie         '/Users/me/.local/share/junie/versions/3110.7/Applications/junie.app/Contents/MacOS/junie'
+  det junie         '/Users/me/.local/share/junie/versions/3110.7/Applications/junie.app/Contents/MacOS/junie --resume'
+  det -             '/Users/me/.local/share/junie/versions/3110.7/Applications/junie.app/Contents/MacOS/junie --version'
+  det openhands     '/tmp/live/oh/tools/openhands/bin/python /tmp/live/oh/bin/openhands'
+  det -             '/tmp/live/cline/node_modules/cline/bin/.cline --cline-hub-daemon --cwd /tmp/work'
   det -             'junie login'
   det claude        '/Users/me/Library/Application Support/Claude/claude-code/2.1.317/91184d3d9ba3/claude.app/Contents/MacOS/claude --output-format stream-json --verbose'
   det -             '/Users/me/Library/Application Support/Claude/claude-code/2.1.317/91184d3d9ba3/claude.app/Contents/MacOS/claude --version'
@@ -1562,6 +1573,15 @@ EOF3
   hostchk background <<'EOF3'
 70 1 S 0.0 9000 02:00:00 00:01.00 claude -p run the nightly job
 EOF3
+  # real process shapes recorded on a Mac (npm installs launched for 7 seconds): Cline runs a hidden native binary and a hub daemon below its node wrapper
+  procs() { printf '%s\n' '47283 1 Ss+ 0.0 46976 00:07 0:00.06 node /tmp/live/cline/node_modules/cline/bin/cline' \
+    '47284 47283 S+ 5.6 312192 00:07 0:00.95 /tmp/live/cline/node_modules/cline/bin/.cline' \
+    '47331 47284 Ss 0.3 229312 00:04 0:00.51 /tmp/live/cline/node_modules/cline/bin/.cline --cline-hub-daemon --cwd /tmp/work' \
+    '48315 1 Ss+ 0.0 54528 00:07 0:00.06 node /tmp/live/jules/node_modules/.bin/jules' \
+    '48316 48315 S+ 0.0 29744 00:07 0:00.07 /tmp/live/jules/node_modules/@google/jules/node_modules/.bin/jules' \
+    '48505 1 Ss+ 0.1 87792 00:08 0:00.21 /tmp/live/grok/node_modules/.bin/grok'; }
+  INSTANT=0; got=$(scan | awk -F'\t' '$1 == "SESS" { printf "%s:%d\n", $2, $5 }' | sort | tr '\n' ' '); INSTANT=1
+  chk "real Cline (3 processes), Jules (2) and Grok (1) shapes are one session each" "$got" "cline#1:3 grok#1:1 jules#1:2 "
   # a capture replayed with --from detects the same agents, and its masking leaves no secret behind
   local capf; capf=$(mktemp)
   printf '%s\n' '10 1 S 0.0 1000 02:00:00 00:00.10 /usr/local/bin/node --max-old-space-size=8192 /Users/me/SECRETPROJ/node_modules/@google/gemini-cli/dist/index.js --token=hunter2' \

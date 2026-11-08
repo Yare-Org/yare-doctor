@@ -2,6 +2,15 @@
 
 Versions follow [semver](https://semver.org). The 0.x line means the output format and options can still change.
 
+## 0.2.1 (2026-11-08)
+
+Five more agents were launched for real (npm and uv installs in throwaway folders, a pseudo-terminal, 7 seconds each) and their actual process lists replayed through the detection: Cline, Jules, Grok (xAI), Junie and OpenHands. That found one more miss:
+
+- **Fixed: Junie was not detected.** It runs as `~/.local/share/junie/versions/VERSION/Applications/junie.app/Contents/MacOS/junie`, an app-bundle binary, which the "desktop apps are hosts" rule skipped. Agents that run from a versioned bundle of their own (this, and the Claude desktop app's `claude.app`) now count.
+- Verified against real launches: Cline (a node wrapper, a hidden `.cline` binary and a `--cline-hub-daemon` that all fold into one session; the daemon is not counted as a second session), Jules, Grok, OpenHands.
+- Still never launched for real: Kiro, Plandex and Devin (their installers are curl-pipe-bash). The community "grok-cli" package needs an API key and exits at once.
+- `tests/launch_in_pty.py` and `tests/tree_only.py` record a real launch so it can be replayed. Self-test: 213 checks.
+
 ## 0.2.0 (2026-11-08)
 
 - New `--installed`: which coding agents (by name in your PATH and the usual install folders) and agent apps (Claude, Codex, Cursor, Windsurf, Zed, Conductor, Warp, VS Code, T3 Code, Xcode ...) are installed here, and which are running now. Nothing is run.
