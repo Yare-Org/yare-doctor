@@ -19,9 +19,49 @@ bash yare-doctor.sh --live          # refreshing view of sessions and CPU (Ctrl-
 bash yare-doctor.sh --why 1234      # who started process 1234? prints its chain up to the agent session
 bash yare-doctor.sh --redact        # hide folder, helper and leftover-command names so the whole report is safe to paste
 bash yare-doctor.sh --checksum      # sha256 of this file, to compare with the release notes
+bash yare-doctor.sh --no-color      # plain text (automatic when piped or when NO_COLOR is set)
 ```
 
-It is about 650 lines of bash. **Read it before you run it**; that is what it is for.
+It is about 800 lines of bash. **Read it before you run it**; that is what it is for.
+
+## What it looks like
+
+Colour and bars in a terminal; plain text when piped or with `--no-color`. This is the top of a real report on a Mac with four agent sessions, run with `--redact` (folder names hidden):
+
+```text
+yare-doctor  0.6.0 · read-only · nothing was changed
+──────────────────────────────────────────────────────────────────────────────────────────────────
+
+  Mac       Apple M3 Max · 14 cores · 36 GB · macOS 27.2 · up 7 days
+  CPU load  ████████░░░░░░░░  6.61 on 14 cores
+  Memory    ████████████░░░░  78% used · swap 9.6 GB
+  Agents    ░░░░░░░░░░░░░░░░  0.2% of the CPU · 0.6 GB · 4 sessions
+  Power     plugged in · high power mode · 55 GB disk free · 10.2k files open · 811 processes
+
+WHAT STANDS OUT
+  ● Swap use is 9.6 GB and free memory is 22%. The Mac is short of memory. The biggest holder is
+    llama-server at 13.3 GB (not an agent).
+  ● Looks forgotten (open over 12 hours, almost no CPU used): codex#1 (open 18h 43m, 21 MB).
+    Closing it would free that memory.
+  ● The same helper was started 3 times across 3 places inside agent sessions: helper-2 (58 MB in
+    total). Often that is one tool per session, which adds up.
+  ● 4 agent sessions are running. Together they and everything started under them use about 0.2%
+    of this Mac's CPU and 0.6 GB.
+
+AGENT SESSIONS  each agent and everything it started
+  SESSION    FOLDER          HOST        RUNNING PROCS     CPU    MEMORY  FILES BUILDS
+  claude#1   folder-1        T3 Code         15m     4    1.7%    298 MB     57      0
+  codex#1    folder-2        JetBrains   18h 43m     2    0.0%     21 MB     29      0
+    ↳ looks forgotten  1 idle helper holding 15 MB
+  claude#2   folder-3        T3 Code         55m     5    0.6%    169 MB     60      0
+    ↳ 3 idle helpers holding 17 MB
+  claude#3   folder-4        T3 Code         32m     4    0.0%    116 MB     53      0
+    ↳ 3 idle helpers holding 17 MB
+
+WHO IS USING THE CPU  the owner is the agent session that started it
+  PROCESS                                      CPU    MEMORY  STARTED BY
+  llama-server                    ████████   43.3%   13.3 GB  not an agent
+```
 
 ## What it reports
 
