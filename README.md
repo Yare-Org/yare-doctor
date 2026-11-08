@@ -21,6 +21,8 @@ bash yare-doctor.sh
 bash yare-doctor.sh                 # one snapshot, run it while your agents are working (about a second)
 bash yare-doctor.sh --watch 60      # sample for a minute: how often did an agent's build overlap yours?
 bash yare-doctor.sh --live          # refreshing view of sessions and CPU (q quits)
+bash yare-doctor.sh --sessions      # just the sessions table
+bash yare-doctor.sh --installed     # which coding agents and agent apps are installed here (nothing is run)
 bash yare-doctor.sh --tree          # every process each session started, as a tree
 bash yare-doctor.sh --why 1234      # who started process 1234? its chain up to the agent session
 bash yare-doctor.sh --cleanup       # what could be closed, with kill commands (printed, never run)
@@ -29,6 +31,7 @@ bash yare-doctor.sh --share         # also prints one line of counts you can pas
 bash yare-doctor.sh --redact        # hide folder, branch and helper names so the whole report is safe to paste
 bash yare-doctor.sh --json          # machine-readable output (--prom for Prometheus)
 bash yare-doctor.sh --check         # quiet; exit 0 nothing to do, 1 worth a look, 2 act on it (cron, scripts)
+bash yare-doctor.sh --check --notify   # same, plus a macOS notification when there is something to look at
 bash yare-doctor.sh --rules         # every rule and threshold it uses, including what counts as an agent
 bash yare-doctor.sh --selftest      # does every part work on this Mac?
 bash yare-doctor.sh --help          # all options
@@ -89,7 +92,7 @@ Processes that no longer have a parent (a dev server an agent left running, or a
 ## What it reports
 
 - **What stands out**: a few plain sentences at the top, only about things it actually found.
-- **Agent sessions**: each session of the 22 coding agents it recognises (Claude Code, Codex, Gemini, OpenCode, Cursor, Copilot, Amp, Aider, Goose, Kilo and more; `--rules` lists them all) and *everything it started*, with the folder it works in, the app it runs in (Terminal, iTerm, VS Code, T3 Code, tmux, ...), how many files it holds open, how long it has been running, when it last started a process (ACTIVE), process count, CPU, memory, CPU time used so far, and builds. Activity Monitor lists processes; this groups them by which agent started them.
+- **Agent sessions**: each session of the 25 coding agents it recognises (Claude Code, Codex, Gemini, OpenCode, Cursor, Copilot, Amp, Aider, Goose, Kilo, Junie, Jules, Grok and more; `--rules` lists them all) and *everything it started*, with the folder it works in, the app it runs in (Terminal, iTerm, VS Code, T3 Code, tmux, ...), how many files it holds open, how long it has been running, when it last started a process (ACTIVE), process count, CPU, memory, CPU time used so far, and builds. Activity Monitor lists processes; this groups them by which agent started them.
 - **Who is using the CPU and memory right now, and who started it.** If your Mac feels slow, this shows whether it is an agent's tree or something else (often it is not the agent).
 - **Idle helpers**: helper processes inside a session that have been alive over 30 minutes and barely used any CPU, with the memory they hold. (An MCP server waiting for requests looks like this too, so it is a pointer, not a verdict.)
 - **Helpers started many times**: the same helper (for example one MCP server per session) running 3 or more times, and how much memory that adds up to.
@@ -113,14 +116,14 @@ Processes that no longer have a parent (a dev server an agent left running, or a
 ## What it does not do
 
 - It does not change anything. It uses only `ps`, `sysctl`, `memory_pressure`, `pmset`, `df`, `sw_vers`, `vm_stat`, `ioreg`, `tmutil status` and `lsof` (which only lists open ports and never connects).
-- It makes **no network calls** and writes **no files**. It does not stop or kill any process (for leftovers it only prints a `kill PID` hint for you to use yourself).
+- It makes **no network calls** and writes **no files**. The only thing it ever does besides printing is the optional `--notify`, which shows a macOS notification. It does not stop or kill any process (for leftovers it only prints a `kill PID` hint for you to use yourself).
 - `--share` output contains counts only: no paths, user names or command lines. The on-screen report does print process names (for example `node twitter-server`), so look before you paste a screenshot.
 
 ## Limits, stated plainly
 
 - It is a rough snapshot, not a benchmark. Overlap shows how often builds collided, not how much it slowed you down.
-- Detection is by process name, script name and ancestry, so it can miss an agent or misflag a process. 16 of the 22 agents were launched for real on one Apple Silicon Mac and their actual process lists are in `--selftest`; the other six (kiro-cli, cline, plandex, openhands, devin, hermes) are covered by their published command lines only. The leftover and idle checks are heuristics. `ps` reports an average CPU figure, not an instant one, and macOS does not always record thermal limits, so "none" does not prove the Mac is not throttled.
-- Built for macOS and tested on a small number of Macs so far (bash 3.2 as shipped with macOS; CI runs `--selftest` on macOS 15 (Apple silicon and Intel), and `tests/` has a generated test of about 1,100 command lines and a random process-tree test). If it gets something wrong on yours, run `bash yare-doctor.sh --capture > capture.txt` (a process list with arguments trimmed) and attach it to an issue; `--from capture.txt` replays it here.
+- Detection is by process name, script name and ancestry, so it can miss an agent or misflag a process. 16 of the 25 agents were launched for real on one Apple Silicon Mac and their actual process lists are in `--selftest`; Claude Code run from the Claude desktop app and Hermes were also seen on a real Mac. The other agents (kiro-cli, cline, plandex, openhands, devin, grok, junie, jules) are recognised by their program name and published command lines only. The leftover and idle checks are heuristics. `ps` reports an average CPU figure, not an instant one, and macOS does not always record thermal limits, so "none" does not prove the Mac is not throttled.
+- Built for macOS and tested on a small number of Macs so far (bash 3.2 as shipped with macOS; CI runs `--selftest` on macOS 15 (Apple silicon and Intel), and `tests/` has a generated test of about 1,300 command lines and a random process-tree test). If it gets something wrong on yours, run `bash yare-doctor.sh --capture > capture.txt` (a process list with arguments trimmed) and attach it to an issue; `--from capture.txt` replays it here.
 
 ## About
 

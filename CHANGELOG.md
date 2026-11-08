@@ -2,6 +2,16 @@
 
 Versions follow [semver](https://semver.org). The 0.x line means the output format and options can still change.
 
+## 0.2.0 (2026-11-08)
+
+- New `--installed`: which coding agents (by name in your PATH and the usual install folders) and agent apps (Claude, Codex, Cursor, Windsurf, Zed, Conductor, Warp, VS Code, T3 Code, Xcode ...) are installed here, and which are running now. Nothing is run.
+- New `--sessions`: just the sessions table.
+- New `--notify` for `--check`: a macOS notification when there is something to look at or a budget is exceeded, for cron or launchd.
+- **Faster:** the network-usage step (`nettop`) waited about 5 seconds on some Macs; a snapshot took 6 s and now takes about 1.4 s.
+- `--json` sessions now include `agent` and `pid`.
+- Three more agents recognised by program name: Grok, Junie (JetBrains) and Jules. 25 in total. These are matched by name only, not tested against a real launch.
+- Self-test: 207 checks (was 199); the generated test has about 1,300 cases.
+
 ## 0.1.1 (2026-11-08)
 
 Found by testing against every command line running on a real Mac, about 1,100 generated launch styles and 1,000 random process trees (`tests/`).

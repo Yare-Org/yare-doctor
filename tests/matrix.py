@@ -24,6 +24,9 @@ A = {
  'openhands':   ('openhands',    None),
  'kimi':        ('kimi',         None),
  'kilo':        ('kilo',         '@kilocode/cli/bin/kilo'),
+ 'grok':        ('grok',         None),
+ 'junie':       ('junie',        None),
+ 'jules':       ('jules',        None),
 }
 cases = []  # (expected, command)
 H = '/Users/me'

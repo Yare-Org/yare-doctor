@@ -6,7 +6,7 @@
 #
 # What it does that Activity Monitor does not: it follows the parent chain of every process, so it can say which agent
 # session started what, how much of the Mac each session is holding, who is using the CPU, and what was left behind.
-VERSION="0.1.1"; RELEASED="2026-11-08"
+VERSION="0.2.0"; RELEASED="2026-11-08"
 set -u
 # cron and launchd start scripts with almost no environment: make sure HOME and the system tool folders exist
 if [ -z "${HOME:-}" ]; then HOME=$(dscl . -read "/Users/$(id -un)" NFSHomeDirectory 2>/dev/null | awk '{ print $2 }'); HOME=${HOME:-/var/root}; export HOME; fi
@@ -25,6 +25,7 @@ ${b}LOOK${x}
   ${b}--watch [SECS]${x}   sample every 5 s (default 60): how often an agent's build ran at the same time as one
                     of yours, and how long agents squeezed a busy Mac.
   ${b}--live${x}           the dashboard, refreshed every 3 seconds (q quits, space pauses).
+  ${b}--sessions${x}       just the sessions table, no other sections.   ${b}--installed${x}  which coding agents are installed on this Mac (nothing is run).
   ${b}--tree [NAME]${x}    every process each session started, as a tree (NAME like claude#2 shows one session).
   ${b}--why PID${x}        who started this process? Its chain up to the agent session, and whether it is an agent itself.
   ${b}--cleanup${x}        what could be closed, with the exact kill commands. It only prints them; it never runs them.
@@ -39,6 +40,7 @@ ${b}SUMMARIES${x}
 
 ${b}AUTOMATION${x}
   ${b}--check${x}          quiet; exit code 0 = nothing to do, 1 = worth a look, 2 = act on it. For scripts and cron.
+  ${b}--notify${x}         with --check: also show a macOS notification when there is something to look at (the one thing it does besides printing).
   ${b}--limit-mem MB${x}   with --check (exit code 2) or --oneline (red mark): when agent sessions hold more than this much memory.
   ${b}--limit-cpu PCT${x}  ... when agents and their apps use more than PCT of one core.   ${b}--limit-sessions N${x}  ... more than N sessions.
   ${b}--prom${x}           Prometheus text format, for node_exporter's textfile collector.
@@ -62,7 +64,7 @@ ${d}It never changes anything: no network, no files written, nothing stopped. Re
 EOF
 }
 
-MODE=snapshot; WATCH_SECS=60; SHARE=0; JSON=0; INTERVAL=5; REDACT=0; WHY_PID=; COLOR=auto; TREE_LABEL=; COMPL_SHELL=; WANT_TREE=0; MD=0; ASCII=0; THEME=${YARE_DOCTOR_THEME:-dark}; FROM_FILE=; FIXTURE=0; CMP_A=; CMP_B=; LIMIT_MEM=0; LIMIT_CPU=0; LIMIT_SESS=0
+MODE=snapshot; NOTIFY=0; WATCH_SECS=60; SHARE=0; JSON=0; INTERVAL=5; REDACT=0; WHY_PID=; COLOR=auto; TREE_LABEL=; COMPL_SHELL=; WANT_TREE=0; MD=0; ASCII=0; THEME=${YARE_DOCTOR_THEME:-dark}; FROM_FILE=; FIXTURE=0; CMP_A=; CMP_B=; LIMIT_MEM=0; LIMIT_CPU=0; LIMIT_SESS=0
 while [ $# -gt 0 ]; do
   case $1 in
     --watch) MODE=watch; if [[ ${2:-} =~ ^[0-9]+$ ]]; then WATCH_SECS=$2; shift; fi ;;
@@ -73,6 +75,9 @@ while [ $# -gt 0 ]; do
     --oneline) MODE=oneline ;;
     --check) MODE=check ;;
     --card) MODE=card ;;
+    --installed) MODE=installed ;;
+    --notify) NOTIFY=1 ;;
+    --sessions) MODE=sessions ;;
     --zoo) MODE=zoo ;;
     --slow) MODE=slow ;;
     --compare) MODE=compare; CMP_A=${2:-}; CMP_B=${3:-}; if [ ! -r "$CMP_A" ] || [ ! -r "$CMP_B" ]; then echo "--compare needs two files made by --json: --compare BEFORE.json AFTER.json" >&2; exit 2; fi; shift 2 ;;
@@ -180,7 +185,7 @@ scan() {
     if (b == "qwen" || b == "qwen-code") return "qwen"
     if (b == "kiro" || b == "kiro-cli") return "kiro-cli"
     if (b == "kilo" || b == "kilocode") return "kilo"
-    if (b == "opencode" || b == "aider" || b == "cursor-agent" || b == "amp" || b == "goose" || b == "crush" || b == "droid" || b == "copilot" || b == "hermes" || b == "auggie" || b == "cline" || b == "plandex" || b == "openhands" || b == "kimi" || b == "devin") return b
+    if (b == "opencode" || b == "aider" || b == "cursor-agent" || b == "amp" || b == "goose" || b == "crush" || b == "droid" || b == "copilot" || b == "hermes" || b == "auggie" || b == "cline" || b == "plandex" || b == "openhands" || b == "kimi" || b == "devin" || b == "grok" || b == "junie" || b == "jules") return b
     return ""
   }
   function pkgagent(low) {
@@ -550,7 +555,7 @@ versions_report() {
 # Bytes each process has moved over the network (nettop only reads counters; it sends nothing): pid<TAB>in<TAB>out
 net_usage() {
   [ "$FIXTURE" = 1 ] && return
-  nettop -P -L 1 -J bytes_in,bytes_out -x 2>/dev/null | awk -F, 'NR > 1 && NF >= 3 { n = split($1, a, "."); pid = a[n]; if (pid ~ /^[0-9]+$/) printf "%s\t%s\t%s\n", pid, $2, $3 }'
+  nettop -P -L 1 -n -J bytes_in,bytes_out -x 2>/dev/null | awk -F, 'NR > 1 && NF >= 3 { n = split($1, a, "."); pid = a[n]; if (pid ~ /^[0-9]+$/) printf "%s\t%s\t%s\n", pid, $2, $3 }'
 }
 # The same, added up per session: label<TAB>in<TAB>out
 net_by_session() {
@@ -1036,7 +1041,7 @@ snapshot() {
   prepare
 
   if (( JSON )); then
-    local sj; sj=$(echo "$SCAN" | awk -F'\t' '$1 == "SESS" { printf "%s{\"label\":\"%s\",\"processes\":%d,\"cpu_percent\":%s,\"memory_mb\":%d,\"cpu_minutes\":%d,\"idle_helpers\":%d,\"builds\":%d,\"looks_forgotten\":%s,\"host\":\"%s\",\"age_seconds\":%d}", (n++ ? "," : ""), $2, $5, $6, $7, $8, $9, $11, ($12 == 1 ? "true" : "false"), $15, $19 }')
+    local sj; sj=$(echo "$SCAN" | awk -F'\t' '$1 == "SESS" { split($2, ag, "#"); printf "%s{\"label\":\"%s\",\"agent\":\"%s\",\"pid\":%d,\"processes\":%d,\"cpu_percent\":%s,\"memory_mb\":%d,\"cpu_minutes\":%d,\"idle_helpers\":%d,\"builds\":%d,\"looks_forgotten\":%s,\"host\":\"%s\",\"age_seconds\":%d}", (n++ ? "," : ""), $2, ag[1], $3, $5, $6, $7, $8, $9, $11, ($12 == 1 ? "true" : "false"), $15, $19 }')
     local fj; fj=$(printf '%s' "$NOTES" | awk -F'\t' 'NF { t = $2; gsub(/\\/, "\\\\", t); gsub(/"/, "\\\"", t); printf "%s{\"level\":\"%s\",\"text\":\"%s\"}", (n++ ? "," : ""), ($1 == 1 ? "act" : $1 == 2 ? "look" : $1 == 3 ? "info" : "ok"), t }')
     printf '{"version":"%s","macos":"%s","cores":%s,"memory_gb":%s,"load_1m":%s,"swap_used":"%s","agents":%s,"agent_sessions":%s,"agent_cpu_percent_of_machine":%s,"agent_memory_mb":%s,"agent_builds":%s,"other_builds":%s,"possible_leftovers":%s,"idle_helpers":%s,"idle_helper_mb":%s,"repeated_helpers":%s,"ports_held":%s,"possible_runaways":%s,"suspended_or_zombie":%s,"forgotten_sessions":%s,"sleep_locks_by_agents":%s,"shared_folders":%s,"disk_free_gb":%s,"energy_mode":"%s","agent_cpu_percent_with_host_apps":%s,"agent_cpu_points_one_core":%s,"agent_with_host_apps_points_one_core":%s,"gpu_percent":%s,"compressed_memory_gb":%s,"time_machine_running":%s,"hung_builds":%s,"health_score":%s,"health_grade":"%s","reclaimable_mb":%s,"findings":[%s],"sessions":[%s]}\n' \
       "$VERSION" "$OSINFO" "$CPUS" "$MEM_GB" "${LOAD:-null}" "${SWAP:-?}" "$A_N" "$SESS_N" "$AG_PCT" "$AG_MB" "$B_AGENT" "$B_OWN" "$LEFT_N" "$IDLE_N" "$IDLE_MB" "$DUP_N" "$PORT_N" "$RUN_N" "$STUCK_N" "$FORGOT_N" "$AWAKE_N" "$SHARED_N" "${DISK:-null}" "$ENERGY" "$UN_PCT" "$AG_CPU" "$UN_PTS" "${GPU:-null}" "${COMPR:-null}" "$([ -n "${TM:-}" ] && echo true || echo false)" "$HUNG_N" "$HSCORE" "$HGRADE" "$RECLAIM_MB" "$fj" "$sj"
@@ -1269,15 +1274,21 @@ oneline() {
 }
 
 # ---- --check: quiet, exit code 0 nothing to do / 1 worth a look / 2 act on it ----
+# --notify (with --check): also show a macOS notification when there is something to look at. The only thing it ever "does".
+notify_mac() {
+  (( NOTIFY )) || return 0
+  local t="${2//\\/}"; t="${t//\"/}"; t="${t:0:200}"
+  osascript -e "display notification \"$t\" with title \"yare-doctor: $1\"" >/dev/null 2>&1 || true
+}
 check() {
   prepare
   local over; over=$(over_budget)
-  if [ -n "$over" ]; then printf '%s%s over budget:%s %s\n' "$R" "$DOT" "$X" "$(echo "$over" | head -1)"; return 2; fi
+  if [ -n "$over" ]; then printf '%s%s over budget:%s %s\n' "$R" "$DOT" "$X" "$(echo "$over" | head -1)"; notify_mac "Over budget" "$(echo "$over" | head -1)"; return 2; fi
   local worst; worst=$(printf '%s' "$NOTES" | awk -F'\t' 'NF && $1 < 3 { if (!w || $1 < w) w = $1 } END { print w + 0 }')
   local first; first=$(printf '%s' "$NOTES" | awk -F'\t' 'NF && $1 < 3' | sort -t"$TAB" -k1,1 | head -1 | cut -f2)
   case $worst in
-    1) printf '%s%s act on it:%s %s\n' "$R" "$DOT" "$X" "$first"; return 2 ;;
-    2) printf '%s%s worth a look:%s %s\n' "$Y" "$DOT" "$X" "$first"; return 1 ;;
+    1) printf '%s%s act on it:%s %s\n' "$R" "$DOT" "$X" "$first"; notify_mac "Act on it" "$first"; return 2 ;;
+    2) printf '%s%s worth a look:%s %s\n' "$Y" "$DOT" "$X" "$first"; notify_mac "Worth a look" "$first"; return 1 ;;
     *) printf '%s%s nothing to do%s\n' "$G" "$OK" "$X"; return 0 ;;
   esac
 }
@@ -1386,6 +1397,11 @@ EOF
   det -             '/Users/me/.codex/packages/app-server-daemon/releases/0.166.0-aarch64-apple-darwin/bin/codex app-server daemon pid-update-loop'
   det -             '/Users/me/.opencode/bin/opencode serve --service'
   det claude        'claude --resume'
+  det grok          '/opt/homebrew/bin/grok'
+  det junie         'node /opt/homebrew/bin/junie --resume'
+  det jules         '/Users/me/.local/bin/jules'
+  det -             'grok --version'
+  det -             'junie login'
   det claude        '/Users/me/Library/Application Support/Claude/claude-code/2.1.317/91184d3d9ba3/claude.app/Contents/MacOS/claude --output-format stream-json --verbose'
   det -             '/Users/me/Library/Application Support/Claude/claude-code/2.1.317/91184d3d9ba3/claude.app/Contents/MacOS/claude --version'
   det -             '/Applications/Claude.app/Contents/MacOS/Claude'
@@ -1650,6 +1666,11 @@ EOF2
   chk "--tree shows the clang under claude#1" "$( (WANT_TREE=1; tree_mode) 2>/dev/null | grep -c 'clang')" 1
   local cap; cap=$(mktemp)
   printf '%s\n' '10 1 S 0.5 90000 05:00:00 0:30.00 /Applications/iTerm.app/Contents/MacOS/iTerm2' '100 10 S 1.0 100000 02:00:00 0:10.00 claude --resume' '101 100 S 0.0 9000 01:30:00 0:00.10 node /x/mcp-server.js' > "$cap"
+  local one2; one2=$(mktemp); printf '4001 1 S 0.0 9000 02:00:00 00:01.00 /Users/me/.local/bin/claude --resume\n' > "$one2"
+  chk "--json lists each session with its agent and pid" "$(bash "${BASH_SOURCE[0]}" --from "$one2" --json 2>/dev/null | grep -o '"agent":"claude","pid":4001')" '"agent":"claude","pid":4001'
+  chk "--sessions shows only the sessions table" "$(bash "${BASH_SOURCE[0]}" --from "$one2" --sessions --no-color 2>/dev/null | grep -c 'claude#1')" 1
+  chk "--installed runs and never launches an agent" "$(bash "${BASH_SOURCE[0]}" --from "$one2" --installed --no-color 2>&1 | grep -c 'CODING AGENTS FOUND')" 1
+  rm -f "$one2"
   chk "--from replays a saved process list" "$(bash "${BASH_SOURCE[0]}" --from "$cap" --json 2>/dev/null | grep -o '"agent_sessions":[0-9]*')" '"agent_sessions":1'
   find "$cap" -delete
   chk "--capture trims commands and keeps the process list" "$(bash "${BASH_SOURCE[0]}" --capture | awk 'END { print (NR > 20 ? "ok" : "short") }')" ok
@@ -1781,12 +1802,12 @@ capture_mode() {
     if (l ~ /^(usr|local|bin|sbin|lib|lib64|libexec|opt|homebrew|cellar|node_modules|applications|library|system|private|var|tmp|share|versions|releases|dist|contents|macos|resources|frameworks|venv|site-packages|node|nodejs|npm|npx|bun|uv|tools|packages|plugins|cache|vendor|current|latest|stable|extensions|helpers|helper|app|build|index|cli|main|bin\.js|index\.js|cli\.js|main\.js|cli\.mjs|index\.mjs|aarch64-apple-darwin|x86_64-apple-darwin|python[0-9.]*|application|support|nvm|asdf|pyenv|volta|fnm|deno|cargo|mise|n|pnpm|yarn)$/) return 1
     if (l ~ /^\.(local|nvm|npm|npm-global|bun|cargo|claude|codex|hermes|opencode|continue|config|cache|volta|asdf|pyenv|fnm|deno|cursor|bin|kilocode|augment|qwen|factory|goose|amp|gemini|aider|kimi|copilot|kiro|cline|crush|plandex|openhands|devin|npm-packages|yarn|pnpm)$/) return 1
     if (l ~ /^@(anthropic-ai|openai|google|github|sourcegraph|qwen-code|augmentcode|charmland|continuedev|kilocode|zed-industries|agentclientprotocol)$/) return 1
-    if (l ~ /^(claude|codex|gemini|opencode|aider|cursor-agent|amp|goose|crush|droid|qwen|kiro|kiro-cli|copilot|hermes|hermes-agent|hermes_cli|auggie|cline|plandex|openhands|kimi|devin|kilo|kilocode|continue)(-code|-cli|-agent|-ai|-chat|-sdk|-acp|-darwin-arm64|-darwin-x64|-darwin-universal)*(\.(js|mjs|cjs|exe|py))?$/) return 1
+    if (l ~ /^(claude|codex|gemini|opencode|aider|cursor-agent|amp|goose|crush|droid|qwen|kiro|kiro-cli|copilot|hermes|hermes-agent|hermes_cli|auggie|cline|plandex|openhands|kimi|devin|grok|junie|jules|kilo|kilocode|continue)(-code|-cli|-agent|-ai|-chat|-sdk|-acp|-darwin-arm64|-darwin-x64|-darwin-universal)*(\.(js|mjs|cjs|exe|py))?$/) return 1
     return 0
   }
   function known(w,   l) {
     l = tolower(w)
-    return (l ~ /^(claude|codex|gemini|opencode|aider|cursor-agent|amp|goose|crush|droid|qwen|kiro|kiro-cli|copilot|hermes|auggie|cline|plandex|openhands|kimi|devin|kilo|kilocode|continue|claude-code|codex-cli|gemini-cli|qwen-code|opencode-ai|aider-chat|kimi-cli|cn|login|logout|update|upgrade|doctor|config|completion|install|uninstall|setup-token|migrate-installer|auth|plugin|plugins|mcp|version|help|session|run|web|acp|serve|app-server|daemon|pid-update-loop|exec|x|dlx|tool|resume|chat|tui|listen|stdio|start|build|test|dev|watch|install|add|remove|npm|node|bun|deno|python|python3)$/)
+    return (l ~ /^(claude|codex|gemini|opencode|aider|cursor-agent|amp|goose|crush|droid|qwen|kiro|kiro-cli|copilot|hermes|auggie|cline|plandex|openhands|kimi|devin|grok|junie|jules|kilo|kilocode|continue|claude-code|codex-cli|gemini-cli|qwen-code|opencode-ai|aider-chat|kimi-cli|cn|login|logout|update|upgrade|doctor|config|completion|install|uninstall|setup-token|migrate-installer|auth|plugin|plugins|mcp|version|help|session|run|web|acp|serve|app-server|daemon|pid-update-loop|exec|x|dlx|tool|resume|chat|tui|listen|stdio|start|build|test|dev|watch|install|add|remove|npm|node|bun|deno|python|python3)$/)
   }
   function sw(w,   n, p, i, o) {
     if (substr(w, 1, 1) == "-") {
@@ -1978,7 +1999,7 @@ rules_mode() {
   section "WHAT COUNTS AS A CODING AGENT" "by program name, or by the script an interpreter runs"
   cat <<'EOF'
   claude  codex  gemini  opencode  aider  cursor-agent  amp  goose  crush  droid  qwen  kiro-cli
-  copilot  hermes  auggie  cline  plandex  openhands  kimi  devin  kilo  continue
+  copilot  hermes  auggie  cline  plandex  openhands  kimi  devin  kilo  continue  grok  junie  jules
 
   - Also found when launched through node, bun, deno, python, ruby, uv, uvx, npx, bunx or pnpm,
     for example `node .../@google/gemini-cli/...` or `python -m aider`. Only the script or module the interpreter
@@ -2108,9 +2129,51 @@ prom_mode() {
   echo "$SCAN" | awk -F'\t' '$1 == "SESS" { printf "yare_doctor_session_processes{session=\"%s\"} %s\n", $2, $5 }'
 }
 
+# ---- --installed: which coding agents are installed on this Mac (nothing is run, only looked for) ----
+installed_mode() {
+  prepare
+  banner "$VERSION $MID installed agents $MID read-only, nothing is run"
+  section "CODING AGENTS FOUND ON THIS MAC" "looked for by name in your PATH and the usual install folders"
+  local dirs d a f found n=0
+  dirs="${PATH//:/ } $HOME/.local/bin $HOME/.claude/local $HOME/.npm-global/bin $HOME/.bun/bin $HOME/.cargo/bin $HOME/.opencode/bin $HOME/.cursor/bin $HOME/.volta/bin $HOME/go/bin /opt/homebrew/bin /usr/local/bin"
+  for a in claude codex gemini opencode aider cursor-agent amp goose crush droid qwen kiro-cli copilot hermes auggie cline plandex openhands kimi devin kilo cn grok junie jules; do
+    found=""
+    for d in $dirs; do
+      [ -n "$d" ] || continue
+      f="$d/$a"
+      if [ -x "$f" ] && [ ! -d "$f" ]; then found="$f"; break; fi
+    done
+    local run; run=$(echo "$SCAN" | awk -F'\t' -v a="$a" '$1 == "SESS" { split($2, p, "#"); if (p[1] == a || (a == "cn" && p[1] == "continue")) c++ } END { print c + 0 }')
+    if [ -n "$found" ] || [ "$run" -gt 0 ]; then
+      n=$((n + 1))
+      local where state
+      if [ -n "$found" ]; then where="${found/#$HOME/~}"; else where="(running, not found in PATH)"; fi
+      if [ "$run" -gt 0 ]; then state="$run running now"; else state="installed, not running"; fi
+      printf '  %s%-14s%s %-48s %s\n' "$B" "$a" "$X" "$where" "$state"
+    fi
+  done
+  if (( n == 0 )); then printf '  %sNo coding agent found in PATH or the usual install folders.%s\n' "$D" "$X"; fi
+  section "APPS THAT RUN AGENTS" "installed in /Applications or ~/Applications"
+  local app m=0
+  for app in "Claude" "Codex" "ChatGPT" "Cursor" "Windsurf" "Zed" "Conductor" "Warp" "Ghostty" "iTerm" "Visual Studio Code" "T3 Code" "T3 Code (Beta)" "Xcode"; do
+    for d in /Applications "$HOME/Applications"; do
+      if [ -d "$d/$app.app" ]; then printf '  %s%-20s%s %s\n' "$B" "$app" "$X" "${d/#$HOME/~}/$app.app"; m=$((m + 1)); break; fi
+    done
+  done
+  if (( m == 0 )); then printf '  %sNone of the common ones found.%s\n' "$D" "$X"; fi
+}
+
+# ---- --sessions: just the sessions table ----
+sessions_mode() {
+  prepare
+  banner "$VERSION $MID sessions $MID read-only"
+  section "AGENT SESSIONS" "each agent and everything it started"
+  sessions_table
+}
+
 # ---- --completions bash|zsh ----
 completions_mode() {
-  local opts="--watch --live --why --oneline --check --card --awards --vibe --tree --cleanup --rules --prom --share --redact --json --selftest --checksum --no-color --color --version --help --limit-mem --limit-cpu --limit-sessions --completions --capture --from --md --ascii --light --slow --compare --zoo"
+  local opts="--watch --live --why --oneline --check --card --awards --vibe --tree --cleanup --installed --sessions --notify --rules --prom --share --redact --json --selftest --checksum --no-color --color --version --help --limit-mem --limit-cpu --limit-sessions --completions --capture --from --md --ascii --light --slow --compare --zoo"
   case ${COMPL_SHELL:-} in
     bash) printf '_yare_doctor() { COMPREPLY=( $(compgen -W "%s" -- "${COMP_WORDS[COMP_CWORD]}") ); }\ncomplete -F _yare_doctor yare-doctor yare-doctor.sh\n' "$opts" ;;
     zsh) printf '#compdef yare-doctor yare-doctor.sh\n_arguments "*: :(%s)"\n' "$opts" ;;
@@ -2124,7 +2187,7 @@ run_mode() {
   case $MODE in
     watch) watch_mode ;; selftest) selftest ;; live) live ;; why) why ;; checksum) checksum ;; oneline) oneline ;;
     check) check ;; card) card ;; awards) awards ;; vibe) vibe_mode ;; cleanup) cleanup_mode ;; rules) rules_mode ;;
-    prom) prom_mode ;; zoo) zoo_mode ;; slow) slow_mode ;; compare) compare_mode ;; capture) capture_mode ;; tree) tree_mode ;; completions) completions_mode ;; *) snapshot ;;
+    prom) prom_mode ;; zoo) zoo_mode ;; slow) slow_mode ;; compare) compare_mode ;; capture) capture_mode ;; tree) tree_mode ;; completions) completions_mode ;; installed) installed_mode ;; sessions) sessions_mode ;; *) snapshot ;;
   esac
 }
 if (( MD )) && (( ! JSON )); then echo '```'; run_mode; rc=$?; echo '```'; exit "$rc"; fi
