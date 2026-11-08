@@ -1,12 +1,12 @@
 #!/bin/bash
 # yare-doctor: read-only check of what your coding agents are running on this Mac.
-# Uses only `ps`, `sysctl`, `memory_pressure`, `pmset`, `df`, `sw_vers` and `lsof` (listing, never connecting). No network, no files
+# Uses only `ps`, `sysctl`, `memory_pressure`, `pmset`, `df`, `sw_vers`, `vm_stat`, `ioreg`, `tmutil` (status only) and `lsof` (listing, never connecting). No network, no files
 # written, nothing killed or changed. Early prototype helper from the Yare project. It reports; it does not claim a speed-up.
 # Works with the bash that ships with macOS (3.2).
 #
 # What it does that Activity Monitor does not: it follows the parent chain of every process, so it can say which agent
 # session started what, how much of the Mac each session is holding, who is using the CPU, and what was left behind.
-VERSION="0.6.0"
+VERSION="0.7.0"
 set -u
 
 usage() {
@@ -23,6 +23,8 @@ ${b}LOOK${x}
                     of yours, and how long agents squeezed a busy Mac.
   ${b}--live${x}           the sessions and CPU tables, refreshed every 3 seconds (Ctrl-C to quit).
   ${b}--why PID${x}        who started this process? Prints its chain up to the agent session, if any.
+  ${b}--oneline${x}        one short status line, for a tmux or shell prompt status bar (fast).
+  ${b}--check${x}          quiet; exit code 0 = nothing to do, 1 = worth a look, 2 = act on it. For scripts and cron.
 
 ${b}SHARE${x}
   ${b}--share${x}          add one line of counts (no paths, user names or commands) to paste in a reply.
@@ -46,6 +48,8 @@ while [ $# -gt 0 ]; do
     --json) JSON=1 ;;
     --selftest) MODE=selftest ;;
     --live) MODE=live ;;
+    --oneline) MODE=oneline ;;
+    --check) MODE=check ;;
     --redact) REDACT=1 ;;
     --checksum) MODE=checksum ;;
     --no-color|--no-colour) COLOR=0 ;;
@@ -73,6 +77,9 @@ TAB=$'\t'
 #   RUN pid owner cpu% age name        a process inside a session at 70%+ CPU for 10+ minutes (possible runaway)
 #   STUCK pid owner state name         suspended (stopped) or zombie process inside a session
 #   MEM pid owner memMB name           processes holding 300 MB or more, with the owner
+#   BLIST pid owner cpu% ageSecs age name   every build or test process, with the agent session that started it (- = yours)
+#   GRP name count memMB cpu% inSessions   a program running 2+ times and 200+ MB in total (all processes, grouped by name)
+#   HUNG pid owner age name            a compiler or linker running 15+ minutes at almost no CPU
 #   TOP pid owner cpu% memMB name                          processes using CPU, with the agent session that owns them
 #   BUILD agent|own count cpu%                             builds and tests, by whether an agent started them
 #   DUP signature count memMB sessions                     the same helper started 3+ times inside agent sessions
@@ -211,6 +218,9 @@ scan() {
       if ((pid in HELP) || !isbuild(LOW[pid])) continue
       ow = (ROOT[pid] != "") ? "agent" : "own"
       bc[ow]++; bcpu[ow] += C[pid]; if (ROOT[pid] != "") sb[ROOT[pid]]++
+      bage = etsecs(E[pid]); bown = (ROOT[pid] != "") ? LABEL[ROOT[pid]] : "-"; split(LOW[pid], bt, " ")
+      printf "BLIST\t%s\t%s\t%.1f\t%d\t%s\t%s\n", pid, bown, C[pid], bage, human(bage), appname(CMD[pid])
+      if (bage > 900 && C[pid] < 0.5 && base(bt[1]) ~ /^(clang|clang\+\+|cc1|swiftc|swift-frontend|rustc|tsc|ld|esbuild)$/) printf "HUNG\t%s\t%s\t%s\t%s\n", pid, bown, human(bage), appname(CMD[pid])
     }
     printf "BUILD\tagent\t%d\t%.1f\n", bc["agent"], bcpu["agent"]
     printf "BUILD\town\t%d\t%.1f\n", bc["own"], bcpu["own"]
@@ -233,6 +243,10 @@ scan() {
     }
     for (s in dc) if (dc[s] >= 3) printf "DUP\t%s\t%d\t%d\t%d\n", s, dc[s], dm[s], ds[s]
 
+    for (pid in n) {
+      gk = appname(CMD[pid]); gc[gk]++; gm[gk] += R[pid] / 1024; gu[gk] += C[pid]; if (ROOT[pid] != "") ga[gk]++
+    }
+    for (gk in gc) if (gc[gk] >= 2 && gm[gk] >= 200) printf "GRP\t%s\t%d\t%d\t%.1f\t%d\n", gk, gc[gk], gm[gk], gu[gk], ga[gk] + 0
     for (pid in n) {
       if (ROOT[pid] != "") printf "MAP\t%s\t%s\n", pid, LABEL[ROOT[pid]]
       else if (pid in LEFTF) printf "MAP\t%s\tleftover\n", pid
@@ -296,6 +310,9 @@ session_files() {
   pids=$(echo "$map" | awk '{ printf "%s%s", (n++ ? "," : ""), $1 }')
   awk 'NR == FNR { own[$1] = $2; next } /^p/ { p = substr($0, 2) } /^f[0-9]/ { if (p in own) c[own[p]]++ } END { for (o in c) printf "%s\t%d\n", o, c[o] }' <(printf '%s\n' "$map") <(lsof -p "$pids" -Fpf 2>/dev/null)
 }
+gpu_info() { ioreg -r -d 1 -w0 -c IOAccelerator 2>/dev/null | awk '/"Device Utilization %"=/ && !u { match($0, /"Device Utilization %"=[0-9]+/); u = substr($0, RSTART + 24, RLENGTH - 24) } /"In use system memory"=/ && !m { match($0, /"In use system memory"=[0-9]+/); m = substr($0, RSTART + 23, RLENGTH - 23) } END { if (u != "") printf "%d %.1f", u, m / 1073741824 }'; }
+compressed_gb() { vm_stat 2>/dev/null | awk '/page size of/ { for (i = 1; i <= NF; i++) if ($i == "of") ps = $(i + 1) } /occupied by compressor/ { v = $NF; sub(/\./, "", v); pg = v } END { if (ps && pg) printf "%.1f", pg * ps / 1073741824 }'; }
+timemachine() { tmutil status 2>/dev/null | awk '/Running/ { v = $3; gsub(/;/, "", v); r = v } /Percent/ { p = $3; gsub(/[";]/, "", p) } END { if (r == 1) printf "%s", (p + 0 > 0 ? sprintf("%d", p * 100) : "?") }'; }
 limits() { echo "$(sysctl -n kern.num_files 2>/dev/null || echo 0) $(sysctl -n kern.maxfiles 2>/dev/null || echo 0) $(sysctl -n kern.maxproc 2>/dev/null || echo 0)"; }
 
 LINK="https://meetyare.vercel.app/?utm_source=doctor&utm_medium=tool&utm_campaign=output"
@@ -329,6 +346,7 @@ gather() { # fills the globals the report and the share line use, from $SCAN
   AWAKE=$(awake); AWAKE_N=$(echo "$AWAKE" | awk -F'\t' 'NF && $4 != "-" { n++ } END { print n + 0 }')
   UPD=$(uptime_days); DISK=$(disk_free_gb); PSRC=$(power_source); BATT=$(battery_pct); OSINFO=$(macos_info)
   read -r F_OPEN F_MAX P_MAX <<< "$(limits)"
+  read -r GPU GPU_GB <<< "$(gpu_info)"; COMPR=$(compressed_gb); TM=$(timemachine); HUNG_N=$(count HUNG)
 }
 
 stand_out() { # builds NOTES from what gather found
@@ -337,6 +355,10 @@ stand_out() { # builds NOTES from what gather found
   while IFS=$'\t' read -r _ pid owner cpu age name; do
     [ -n "${pid:-}" ] && note 1 "$name (pid $pid, started by $owner) is using ${cpu}% CPU and has been running $age. It may be stuck in a loop."
   done <<< "$(echo "$SCAN" | awk -F'\t' '$1 == "RUN"')"
+  while IFS=$'\t' read -r _ pid owner age name; do
+    [ -n "${pid:-}" ] && note 2 "A $name build (pid $pid, $( [ "$owner" = - ] && echo yours || echo "started by $owner")) has been running $age at almost no CPU. It may be hung."
+  done <<< "$(echo "$SCAN" | awk -F'\t' '$1 == "HUNG"')"
+  if [ -n "${TM:-}" ]; then note 2 "Time Machine is backing up right now${TM:+ ($TM%)}. Backups use the disk and CPU and can slow builds."; fi
   if [[ ${THERM:-100} =~ ^[0-9]+$ ]] && (( ${THERM:-100} < 100 )); then note 1 "macOS has recorded a CPU speed limit of ${THERM}% (heat or power). The Mac is running slower than normal."; fi
   local swap_mb; swap_mb=$(echo "${SWAP:-0}" | awk '/G/ { v = $1; sub(/G/, "", v); print int(v * 1024); next } { v = $1; sub(/M/, "", v); print int(v) }')
   if [[ ${swap_mb:-0} =~ ^[0-9]+$ ]] && (( ${swap_mb:-0} >= 2048 )) && [[ ${FREE:-100} =~ ^[0-9]+$ ]] && (( ${FREE:-100} < 30 )); then
@@ -365,6 +387,7 @@ stand_out() { # builds NOTES from what gather found
   if [[ ${DISK:-99} =~ ^[0-9]+$ ]] && (( ${DISK:-99} < 20 )); then note 2 "Only ${DISK} GB of disk is free. Builds, swap and caches can fail or slow down when the disk is this full."; fi
   if (( ${F_MAX:-0} > 0 && ${F_OPEN:-0} * 100 / ${F_MAX:-1} >= 60 )); then note 2 "The Mac has ${F_OPEN} files open out of a limit of ${F_MAX}. Agents and file watchers can hit that limit (errors like 'too many open files')."; fi
   if (( ${P_MAX:-0} > 0 && ${P_NOW:-0} * 100 / ${P_MAX:-1} >= 60 )); then note 2 "${P_NOW} processes are running out of a limit of ${P_MAX}. New processes can fail to start near the limit."; fi
+  if [[ ${GPU:-0} =~ ^[0-9]+$ ]] && (( ${GPU:-0} >= 70 )); then note 3 "The GPU is ${GPU}% busy (${GPU_GB:-?} GB in use). Local models, screen recording and GPU-heavy apps compete for it."; fi
   if [ "${PSRC:-}" = battery ]; then note 3 "The Mac is on battery${BATT:+ (${BATT}%)}. Builds and agents drain it fast, and macOS may slow them down."; fi
   line=$(echo "$SCAN" | awk -F'\t' '$1 == "SESS" && $14 > 0 { printf "%s%s runs %d nested agent process(es)", (n++ ? "; " : ""), $2, $14 }')
   if [ -n "$line" ]; then note 3 "Agents inside agents (parallel workers): $line."; fi
@@ -420,7 +443,7 @@ function wrap(s, w, ind,   n, a, i, line, out) {
   return out line
 }
 '
-fmt_size() { echo "$1" | awk '/G/ { v = $1; sub(/G/, "", v); printf "%.1f GB", v; next } { v = $1; sub(/M/, "", v); if (v >= 1024) printf "%.1f GB", v / 1024; else printf "%d MB", v }'; }
+fmt_size() { echo "$1" | awk '/G/ { v = $1; sub(/G/, "", v); printf "%.1f GB", v; next } { v = $1; sub(/M/, "", v); v = v + 0; if (v >= 1024) printf "%.1f GB", v / 1024; else printf "%d MB", v }'; }
 pl() { if [ "$1" = 1 ]; then echo "$1 $2"; else echo "$1 ${3:-${2}s}"; fi; }
 fmt_k() { awk -v n="$1" 'BEGIN { if (n >= 1000) printf "%.1fk", n / 1000; else printf "%d", n }'; }
 
@@ -443,10 +466,11 @@ dash() {
   case $ENERGY in low) en="low power mode" ;; high) en="high power mode" ;; *) en="normal power mode" ;; esac
   if [ "${PSRC:-}" = battery ]; then pw="on battery${BATT:+ ${BATT}%}"; else pw="plugged in"; fi
   uawk -v cpus="$CORES" -v load="${LOAD:-0}" -v used="$used" -v agp="$AG_PCT" -v ns="$SESS_N" -v chip="$chip" -v ver="$ver" -v mem="$MEM_GB" -v up="${UPD:-?}" \
-    -v swap="$(fmt_size "${SWAP:-0M}")" -v agmem="$(fmt_size "${AG_MB}M")" -v pw="$pw" -v en="$en" -v disk="${DISK:-?}" -v files="$(fmt_k "${F_OPEN:-0}")" -v procs="${P_NOW:-?}" "$AWKLIB"'BEGIN {
+    -v swap="$(fmt_size "${SWAP:-0M}")" -v agmem="$(fmt_size "${AG_MB}M")" -v pw="$pw" -v en="$en" -v disk="${DISK:-?}" -v files="$(fmt_k "${F_OPEN:-0}")" -v procs="${P_NOW:-?}" -v compr="${COMPR:-}" -v gpu="${GPU:-}" -v gpugb="${GPU_GB:-}" "$AWKLIB"'BEGIN {
     printf "  %s%-9s%s %s %s %s cores %s %s GB %s %s %s up %s %s\n", DIM, "Mac", RST, chip, MID, cpus, MID, mem, MID, ver, MID, up, (up == 1 ? "day" : "days")
     printf "  %s%-9s%s %s%s%s  %s on %s cores\n", DIM, "CPU load", RST, heat(load / cpus * 100, 70, 100), bar(load / cpus, 16), RST, load, cpus
-    printf "  %s%-9s%s %s%s%s  %d%% used %s swap %s\n", DIM, "Memory", RST, heat(used, 80, 90), bar(used / 100, 16), RST, used, MID, swap
+    printf "  %s%-9s%s %s%s%s  %d%% used %s swap %s%s\n", DIM, "Memory", RST, heat(used, 80, 90), bar(used / 100, 16), RST, used, MID, swap, (compr != "" ? " " MID " " compr " GB compressed" : "")
+    if (gpu != "") printf "  %s%-9s%s %s%s%s  %d%% busy %s %s GB in use\n", DIM, "GPU", RST, heat(gpu, 70, 90), bar(gpu / 100, 16), RST, gpu, MID, gpugb
     printf "  %s%-9s%s %s%s%s  %s%% of the CPU %s %s %s %d %s\n", DIM, "Agents", RST, heat(agp, 25, 50), bar(agp / 100, 16), RST, agp, MID, agmem, MID, ns, (ns == 1 ? "session" : "sessions")
     printf "  %s%-9s%s %s %s %s %s %s GB disk free %s %s files open %s %s processes\n", DIM, "Power", RST, pw, MID, en, MID, disk, MID, files, MID, procs
   }'
@@ -516,8 +540,8 @@ snapshot() {
 
   if (( JSON )); then
     local sj; sj=$(echo "$SCAN" | awk -F'\t' '$1 == "SESS" { printf "%s{\"label\":\"%s\",\"processes\":%d,\"cpu_percent\":%s,\"memory_mb\":%d,\"cpu_minutes\":%d,\"idle_helpers\":%d,\"builds\":%d,\"looks_forgotten\":%s}", (n++ ? "," : ""), $2, $5, $6, $7, $8, $9, $11, ($12 == 1 ? "true" : "false") }')
-    printf '{"version":"%s","macos":"%s","cores":%s,"memory_gb":%s,"load_1m":%s,"swap_used":"%s","agents":%s,"agent_sessions":%s,"agent_cpu_percent_of_machine":%s,"agent_memory_mb":%s,"agent_builds":%s,"other_builds":%s,"possible_leftovers":%s,"idle_helpers":%s,"idle_helper_mb":%s,"repeated_helpers":%s,"ports_held":%s,"possible_runaways":%s,"suspended_or_zombie":%s,"forgotten_sessions":%s,"sleep_locks_by_agents":%s,"shared_folders":%s,"disk_free_gb":%s,"energy_mode":"%s","sessions":[%s]}\n' \
-      "$VERSION" "$OSINFO" "$CPUS" "$MEM_GB" "${LOAD:-null}" "${SWAP:-?}" "$A_N" "$SESS_N" "$AG_PCT" "$AG_MB" "$B_AGENT" "$B_OWN" "$LEFT_N" "$IDLE_N" "$IDLE_MB" "$DUP_N" "$PORT_N" "$RUN_N" "$STUCK_N" "$FORGOT_N" "$AWAKE_N" "$SHARED_N" "${DISK:-null}" "$ENERGY" "$sj"
+    printf '{"version":"%s","macos":"%s","cores":%s,"memory_gb":%s,"load_1m":%s,"swap_used":"%s","agents":%s,"agent_sessions":%s,"agent_cpu_percent_of_machine":%s,"agent_memory_mb":%s,"agent_builds":%s,"other_builds":%s,"possible_leftovers":%s,"idle_helpers":%s,"idle_helper_mb":%s,"repeated_helpers":%s,"ports_held":%s,"possible_runaways":%s,"suspended_or_zombie":%s,"forgotten_sessions":%s,"sleep_locks_by_agents":%s,"shared_folders":%s,"disk_free_gb":%s,"energy_mode":"%s","gpu_percent":%s,"compressed_memory_gb":%s,"time_machine_running":%s,"hung_builds":%s,"sessions":[%s]}\n' \
+      "$VERSION" "$OSINFO" "$CPUS" "$MEM_GB" "${LOAD:-null}" "${SWAP:-?}" "$A_N" "$SESS_N" "$AG_PCT" "$AG_MB" "$B_AGENT" "$B_OWN" "$LEFT_N" "$IDLE_N" "$IDLE_MB" "$DUP_N" "$PORT_N" "$RUN_N" "$STUCK_N" "$FORGOT_N" "$AWAKE_N" "$SHARED_N" "${DISK:-null}" "$ENERGY" "${GPU:-null}" "${COMPR:-null}" "$([ -n "${TM:-}" ] && echo true || echo false)" "$HUNG_N" "$sj"
     return
   fi
 
@@ -537,10 +561,21 @@ snapshot() {
       $1 == "RUN" { printf "  %s%s%s %s is at %s%% CPU after running %s: it may be stuck in a loop %s(started by %s, pid %s)%s\n", RED, DOT, RST, pad($6, 22), $4, $5, DIM, $3, $2, RST }
       $1 == "STUCK" { printf "  %s%s%s %s is %s %s(started by %s, pid %s): %s%s\n", YEL, DOT, RST, pad($5, 22), ($4 == "Z" ? "a zombie" : "suspended"), DIM, $3, $2, ($4 == "Z" ? "already finished, waiting for its parent" : "it still holds its memory"), RST }'
   fi
+  local gt; gt=$(echo "$SCAN" | awk -F'\t' '$1 == "GRP"' | sort -t"$TAB" -k4 -nr | head -5)
+  if [ -n "$gt" ]; then
+    section "MEMORY BY PROGRAM" "the same program counted together, so many small processes show up"
+    echo "$gt" | uawk -F'\t' "$AWKLIB"'{ nm[NR] = $2; cnt[NR] = $3; mem[NR] = $4; cpu[NR] = $5; ag[NR] = $6; if ($4 > mx) mx = $4 }
+      END { printf "  %s%-30s  %-8s %6s %9s  %s%s\n", DIM, "PROGRAM", "", "COUNT", "MEMORY", "INSIDE AGENT SESSIONS", RST
+        for (i = 1; i <= NR; i++) printf "  %-30s  %s%s%s %6d %s%9s%s  %s\n", pad(nm[i], 30), heat(mem[i], 2000, 6000), bar(mem[i] / mx, 8), RST, cnt[i], heat(mem[i], 2000, 6000), mb(mem[i]), RST, (ag[i] > 0 ? CYA ag[i] " of " cnt[i] RST : DIM "none" RST) }'
+  fi
   section "BUILDS AND TESTS" "agent-started and yours"
   printf '  %-36s %3d   %s%s%% CPU%s\n' "started by an agent" "$B_AGENT" "$D" "$B_AGENT_CPU" "$X"
   printf '  %-36s %3d   %s%s%% CPU%s\n' "not under any agent (likely yours)" "$B_OWN" "$D" "$B_OWN_CPU" "$X"
   if (( B_AGENT > 0 && B_OWN > 0 )); then printf '  %s%s both kinds are running at the same time right now%s\n' "$Y" "$DOT" "$X"; fi
+  if (( B_AGENT + B_OWN > 0 )); then
+    echo "$SCAN" | awk -F'\t' '$1 == "BLIST"' | sort -t"$TAB" -k5 -nr | head -6 | uawk -F'\t' "$AWKLIB"'{ if (!h++) printf "  %s%-26s %7s %7s  %s%s\n", DIM, "RUNNING NOW", "CPU", "FOR", "STARTED BY", RST
+      printf "  %-26s %6.1f%% %7s  %s\n", pad($7, 26), $4, $6, ($3 == "-" ? "you (not under an agent)" : CYA $3 RST) }'
+  fi
   if (( DUP_N > 0 )); then
     section "THE SAME HELPER STARTED MANY TIMES" "3 or more inside agent sessions"
     echo "$SCAN" | awk -F'\t' '$1 == "DUP"' | sort -t"$TAB" -k3 -nr | head -5 | uawk -F'\t' "$AWKLIB"'{ printf "  %s%3d x%s  %-34s %9s  %sacross %s%s\n", BLD, $3, RST, pad($2, 34), mb($4), DIM, pl($5, "session", "sessions"), RST }'
@@ -566,7 +601,7 @@ snapshot() {
 watch_mode() {
   local samples=$(( WATCH_SECS / INTERVAL )) i
   local peak_agents=0 peak_ab=0 peak_ob=0 peak_load=0 peak_sess=0 overlap=0 agent_build_samples=0 own_build_samples=0
-  local squeezed=0 busy=0 rows="" srows="" first_mem="" last_mem=0 allpids="" n0="" spk=""
+  local squeezed=0 busy=0 rows="" srows="" first_mem="" last_mem=0 allpids="" n0="" spk="" roots_first="" roots_all="" roots_last="" prows=""
   local swap_start; swap_start=$(swap_used)
   if (( ! JSON )); then
     banner "$VERSION $MID watching for ${WATCH_SECS}s $MID a sample every ${INTERVAL}s $MID read-only"
@@ -597,6 +632,9 @@ watch_mode() {
       busy=$((busy + 1))
       if awk -v a="$allc" -v g="$agc" 'BEGIN { exit !(g >= a / 3) }'; then squeezed=$((squeezed + 1)); fi
     fi
+    roots_last=$(echo "$SCAN" | awk -F'\t' '$1 == "SESS" { print $3 }'); [ -z "$roots_first" ] && roots_first=$roots_last
+    roots_all="${roots_all}${roots_last}"$'\n'
+    prows="${prows}$(echo "$SCAN" | awk -F'\t' '$1 == "MEM" { print $2 "\t" $3 "\t" $4 "\t" $5 }')"$'\n'
     rows="${rows}${allc} ${agc}"$'\n'
     srows="${srows}$(echo "$SCAN" | awk -F'\t' '$1 == "SESS" { print $3, $2, $6, $7 }')"$'\n'
     last_mem=$(total TOT "" 5); [ -z "$first_mem" ] && first_mem=$last_mem
@@ -613,10 +651,15 @@ watch_mode() {
   local busiest; busiest=$(echo "$srows" | awk 'NF { s[$1] += $3; n[$1] = $2 } END { for (p in s) if (s[p] > m) { m = s[p]; b = n[p] " (pid " p ")" } print b }')
   local grow; grow=$(echo "$srows" | awk 'NF { if (!($1 in f)) { f[$1] = $4; nm[$1] = $2 } l[$1] = $4 } END { for (p in l) { d = l[p] - f[p]; if (d > m) { m = d; b = nm[p] " (pid " p ")" } } if (m >= 50) printf "%s +%d MB", b, m }')
   local newp; newp=$(echo "$allpids" | sort -u | awk -v n0="${n0:-0}" 'NF { n++ } END { v = n - n0; print (v > 0 ? v : 0) }')
+  local started ended n_first n_last
+  n_first=$(echo "$roots_first" | awk 'NF { n++ } END { print n + 0 }'); n_last=$(echo "$roots_last" | awk 'NF { n++ } END { print n + 0 }')
+  started=$(echo "$roots_all" | sort -u | awk 'NR == FNR { f[$1] = 1; next } NF && !($1 in f) { n++ } END { print n + 0 }' <(echo "$roots_first") -)
+  ended=$(echo "$roots_all" | sort -u | awk 'NR == FNR { l[$1] = 1; next } NF && !($1 in l) { n++ } END { print n + 0 }' <(echo "$roots_last") -)
+  local pgrow; pgrow=$(printf '%s' "$prows" | awk -F'\t' 'NF { if (!($1 in f)) { f[$1] = $3; nm[$1] = $4; ow[$1] = $2 } l[$1] = $3 } END { for (p in l) { d = l[p] - f[p]; if (d > m) { m = d; b = nm[p] " (" (ow[p] == "-" ? "not an agent" : "started by " ow[p]) ")" } } if (m >= 100) printf "%s grew by %d MB", b, m }')
   LOAD=$peak_load; SWAP=$swap_end; B_AGENT=$peak_ab; B_OWN=$peak_ob
   if (( JSON )); then
-    printf '{"version":"%s","watch_seconds":%s,"peak_agents":%s,"peak_sessions":%s,"peak_agent_builds":%s,"peak_other_builds":%s,"seconds_agent_builds_overlapped_other_builds":%s,"seconds_with_agent_builds":%s,"seconds_with_other_builds":%s,"seconds_machine_busy":%s,"seconds_squeezed_by_agents":%s,"agent_cpu_minutes":%s,"other_cpu_minutes":%s,"agent_memory_mb_start":%s,"agent_memory_mb_end":%s,"new_processes_seen":%s,"peak_load_1m":%s,"swap_used_start":"%s","swap_used_end":"%s"}\n' \
-      "$VERSION" "$WATCH_SECS" "$peak_agents" "$peak_sess" "$peak_ab" "$peak_ob" "$ov_s" "$ab_s" "$ob_s" "$busy_s" "$sq_s" "$ag_min" "$oth_min" "${first_mem:-0}" "${last_mem:-0}" "$newp" "${peak_load:-0}" "${swap_start:-?}" "${swap_end:-?}"
+    printf '{"version":"%s","watch_seconds":%s,"peak_agents":%s,"peak_sessions":%s,"peak_agent_builds":%s,"peak_other_builds":%s,"seconds_agent_builds_overlapped_other_builds":%s,"seconds_with_agent_builds":%s,"seconds_with_other_builds":%s,"seconds_machine_busy":%s,"seconds_squeezed_by_agents":%s,"agent_cpu_minutes":%s,"other_cpu_minutes":%s,"agent_memory_mb_start":%s,"agent_memory_mb_end":%s,"sessions_started":%s,"sessions_ended":%s,"new_processes_seen":%s,"peak_load_1m":%s,"swap_used_start":"%s","swap_used_end":"%s"}\n' \
+      "$VERSION" "$WATCH_SECS" "$peak_agents" "$peak_sess" "$peak_ab" "$peak_ob" "$ov_s" "$ab_s" "$ob_s" "$busy_s" "$sq_s" "$ag_min" "$oth_min" "${first_mem:-0}" "${last_mem:-0}" "$started" "$ended" "$newp" "${peak_load:-0}" "${swap_start:-?}" "${swap_end:-?}"
     return
   fi
   local line_sparks; line_sparks=$(uawk -v v="$spk" "$AWKLIB"'BEGIN { mx = 0; n = split(v, a, " "); for (i = 1; i <= n; i++) if (a[i] + 0 > mx) mx = a[i] + 0; print spark(v, mx) }')
@@ -634,6 +677,8 @@ watch_mode() {
   fi
   printf '  %s%-16s%s agents and what they started: %s CPU-min %s everything else: %s CPU-min\n' "$D" "CPU used" "$X" "$ag_min" "$MID" "$oth_min"
   printf '  %s%-16s%s agent sessions: %s %s %s%s\n' "$D" "Memory" "$X" "$(fmt_size "${first_mem:-0}M")" "$ARW" "$(fmt_size "${last_mem:-0}M")" "${grow:+  $MID biggest growth: $grow}"
+  printf '  %s%-16s%s %s at the start, %s at the end %s(%s started, %s ended)%s\n' "$D" "Sessions" "$X" "$n_first" "$n_last" "$D" "$started" "$ended" "$X"
+  if [ -n "$pgrow" ]; then printf '  %s%-16s%s %s%s%s %s\n' "$D" "Fastest growth" "$X" "$Y" "$DOT" "$X" "$pgrow"; fi
   printf '  %s%-16s%s at least %s started by agent sessions %s(very short-lived ones between samples are missed)%s\n' "$D" "New processes" "$X" "$newp" "$D" "$X"
   if [ -n "$busiest" ]; then printf '  %s%-16s%s %s\n' "$D" "Busiest session" "$X" "$busiest"; fi
   printf '  %s%-16s%s %s in %s %s load %s %s swap %s %s %s\n' "$D" "Peak" "$X" "$(pl "$peak_agents" "agent process" "agent processes")" "$(pl "$peak_sess" session sessions)" "$MID" "$peak_load" "$MID" "$(fmt_size "${swap_start:-0M}")" "$ARW" "$(fmt_size "${swap_end:-0M}")"
@@ -682,6 +727,26 @@ why() {
   done
   echo
   if [ -n "$owner" ] && [ "$owner" != leftover ]; then printf '  %s%s%s it belongs to agent session %s%s%s\n' "$C" "$ARW" "$X" "$B" "$owner" "$X"; else printf '  %s%s it is not under any coding agent we recognise%s\n' "$D" "$ARW" "$X"; fi
+}
+
+# ---- --oneline: a short status for a tmux or prompt status bar (skips the slower checks) ----
+oneline() {
+  SCAN=$(scan)
+  SESS_N=$(count SESS); AG_PCT=$(pct "$(total TOT "" 4)"); AG_MB=$(total TOT "" 5); LOAD=$(load1); FREE=$(mem_free_pct)
+  local mark="$OK"; if (( $(count RUN) > 0 )); then mark="$DOT"; fi
+  printf '%s %s %s %s %s %s%% CPU %s load %s %s %s%% memory free\n' "$mark" "$(pl "$SESS_N" agent agents)" "$MID" "$(fmt_size "${AG_MB}M")" "$MID" "$AG_PCT" "$MID" "${LOAD:-?}" "$MID" "${FREE:-?}"
+}
+
+# ---- --check: quiet, exit code 0 nothing to do / 1 worth a look / 2 act on it ----
+check() {
+  SCAN=$(scan); gather; stand_out
+  local worst; worst=$(printf '%s' "$NOTES" | awk -F'\t' 'NF && $1 < 3 { if (!w || $1 < w) w = $1 } END { print w + 0 }')
+  local first; first=$(printf '%s' "$NOTES" | awk -F'\t' 'NF && $1 < 3' | sort -t"$TAB" -k1,1 | head -1 | cut -f2)
+  case $worst in
+    1) printf '%s%s act on it:%s %s\n' "$R" "$DOT" "$X" "$first"; return 2 ;;
+    2) printf '%s%s worth a look:%s %s\n' "$Y" "$DOT" "$X" "$first"; return 1 ;;
+    *) printf '%s%s nothing to do%s\n' "$G" "$OK" "$X"; return 0 ;;
+  esac
 }
 
 # ---- --live: the same sessions and CPU tables, refreshed in place ----
@@ -734,24 +799,27 @@ selftest() {
   procs() { cat <<'EOF'
 10 1 S 0.5 90000 05:00:00 00:30.00 /Applications/iTerm.app/Contents/MacOS/iTerm2
 100 10 S 1.0 100000 02:00:00 00:10.00 /usr/local/bin/claude --resume
-101 100 S 0.0 50000 01:30:00 00:00.10 node /x/mcp-server.js
-102 100 S 0.0 50000 01:30:00 00:00.10 node /y/mcp-server.js
-103 100 S 0.0 50000 01:30:00 00:00.10 node /z/mcp-server.js
+101 100 S 0.0 90000 01:30:00 00:00.10 node /x/mcp-server.js
+102 100 S 0.0 90000 01:30:00 00:00.10 node /y/mcp-server.js
+103 100 S 0.0 90000 01:30:00 00:00.10 node /z/mcp-server.js
 104 100 S 5.0 20000 01:00 00:02.00 /usr/bin/clang -c a.c
 105 104 T 0.0 1000 20:00 00:00.00 worker
 106 100 R 90.0 80000 20:00 00:12.00 python3 loop.py
 107 106 S 0.0 1000 01:00 00:00.01 /usr/local/bin/claude -p subtask
+108 100 S 0.0 1000 30:00 00:00.50 /usr/bin/clang -c hung.c
 300 1 S 0.0 40000 01:00:00 00:00.10 node /w/mcp-leftover.js
 EOF
   }
   SCAN=$(scan)
   section "PARSER" "a made-up process list with known answers"
   chk "one agent session found" "$(count SESS)" 1
-  chk "session has 8 processes" "$(total SESS "" 5)" 8
+  chk "session has 9 processes" "$(total SESS "" 5)" 9
   chk "nested agent found" "$(total SESS "" 14)" 1
   chk "terminal app found (iTerm)" "$(echo "$SCAN" | awk -F'\t' '$1 == "SESS" { print $15 }')" iTerm
-  chk "agent build found under the agent" "$(total BUILD agent 3)" 1
+  chk "agent builds found under the agent" "$(total BUILD agent 3)" 2
+  chk "hung build found" "$(count HUNG)" 1
   chk "same helper 3 times found" "$(echo "$SCAN" | awk -F'\t' '$1 == "DUP" { print $3 }')" 3
+  chk "program group found (node x4)" "$(echo "$SCAN" | awk -F'\t' '$1 == "GRP" && $2 == "node" { print $3 }')" 4
   chk "leftover found" "$(count LEFT)" 1
   chk "suspended process found" "$(count STUCK)" 1
   chk "runaway process found" "$(count RUN)" 1
@@ -778,4 +846,4 @@ EOF
 }
 
 setup_ui
-case $MODE in watch) watch_mode ;; selftest) selftest ;; live) live ;; why) why ;; checksum) checksum ;; *) snapshot ;; esac
+case $MODE in watch) watch_mode ;; selftest) selftest ;; live) live ;; why) why ;; checksum) checksum ;; oneline) oneline ;; check) check; exit $? ;; *) snapshot ;; esac

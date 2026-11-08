@@ -19,10 +19,12 @@ bash yare-doctor.sh --live          # refreshing view of sessions and CPU (Ctrl-
 bash yare-doctor.sh --why 1234      # who started process 1234? prints its chain up to the agent session
 bash yare-doctor.sh --redact        # hide folder, helper and leftover-command names so the whole report is safe to paste
 bash yare-doctor.sh --checksum      # sha256 of this file, to compare with the release notes
+bash yare-doctor.sh --oneline       # one short line for a tmux or prompt status bar
+bash yare-doctor.sh --check         # quiet; exit code 0 nothing to do, 1 worth a look, 2 act on it (for scripts and cron)
 bash yare-doctor.sh --no-color      # plain text (automatic when piped or when NO_COLOR is set)
 ```
 
-It is about 800 lines of bash. **Read it before you run it**; that is what it is for.
+It is about 850 lines of bash. **Read it before you run it**; that is what it is for.
 
 ## What it looks like
 
@@ -73,19 +75,21 @@ WHO IS USING THE CPU  the owner is the agent session that started it
 - **Agents inside agents**: nested agent processes (parallel workers) started by a session.
 - **Needs a look**: a process inside a session using 70%+ CPU for 10+ minutes (possible runaway), suspended or zombie processes that still hold memory, and sessions that look forgotten (open 12+ hours, almost no CPU).
 - **Sessions sharing a folder**: two agents working in the same folder share its files and build output, so their builds can collide.
+- **Memory by program**: the same program counted together (for example 37 Chrome helper processes adding up to 4.8 GB), and how many of them are inside agent sessions. Activity Monitor lists them one by one.
+- **Builds running now**: each build or test process, how long it has run, who started it, and a flag for a compiler that has run 15+ minutes at almost no CPU (possibly hung).
 - **Ports held open** by agent sessions, or by things that look left behind, so you can see why a dev server will not start on its usual port.
 - **Builds and test runs** (clang, swiftc, cargo, tsc, xcodebuild, make, ninja, vite, jest, ...), split into **started by an agent** and **not under any agent**, which is usually you.
 - **Leftovers**: helper processes with no parent that have been alive over 30 minutes, which may belong to sessions that ended.
 - **What is keeping the Mac awake** (for example `caffeinate`), and whether an agent started it.
-- **Mac state that changes build speed**: load, swap, free memory, battery, free disk, open-file and process limits, Low Power Mode, and any CPU speed limit macOS has recorded. When a macOS service such as Spotlight is the busiest thing, it says so, because the slowness may not be the agents' fault.
+- **Mac state that changes build speed**: load, swap, compressed memory, GPU use, free memory, battery, free disk, whether Time Machine is backing up, open-file and process limits, Low Power Mode, and any CPU speed limit macOS has recorded. When a macOS service such as Spotlight is the busiest thing, it says so, because the slowness may not be the agents' fault.
 - With `--why PID`: the chain of processes that started that one, from the top (an app or terminal) down, and which agent session it belongs to, if any.
 - With `--redact`: replaces folder names with `folder-1`, repeated-helper names with `helper-1` and leftover commands with a placeholder, so the report can be pasted. Process names in the CPU and memory lists are still shown (for example `Google Chrome Helper`), so look before you paste.
 - With `--selftest`: checks every part of the script against a made-up process list with known answers and against your Mac, prints PASS or FAIL for each, and gives a one-line, no-personal-data summary to paste into an issue if something fails.
-- With `--watch`: a sample every 5 seconds, how many seconds an agent's build and a build of yours were running together, how many seconds the Mac was at 80% CPU or more with agents making up a third or more of that, how many CPU-minutes agents used compared with everything else, the busiest session, how much memory the agent sessions gained, and at least how many new processes they started.
+- With `--watch`: a sample every 5 seconds, how many seconds an agent's build and a build of yours were running together, how many seconds the Mac was at 80% CPU or more with agents making up a third or more of that, how many CPU-minutes agents used compared with everything else, the busiest session, how much memory the agent sessions gained, the fastest-growing process, how many sessions started or ended, and at least how many new processes they started.
 
 ## What it does not do
 
-- It does not change anything. It uses only `ps`, `sysctl`, `memory_pressure`, `pmset`, `df`, `sw_vers` and `lsof` (which only lists open ports and never connects).
+- It does not change anything. It uses only `ps`, `sysctl`, `memory_pressure`, `pmset`, `df`, `sw_vers`, `vm_stat`, `ioreg`, `tmutil status` and `lsof` (which only lists open ports and never connects).
 - It makes **no network calls** and writes **no files**. It does not stop or kill any process (for leftovers it only prints a `kill PID` hint for you to use yourself).
 - `--share` output contains counts only: no paths, user names or command lines. The on-screen report does print process names (for example `node twitter-server`), so look before you paste a screenshot.
 
