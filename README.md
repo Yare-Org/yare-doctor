@@ -120,7 +120,7 @@ Processes that no longer have a parent (a dev server an agent left running, or a
 
 - It is a rough snapshot, not a benchmark. Overlap shows how often builds collided, not how much it slowed you down.
 - Detection is by process name, script name and ancestry, so it can miss an agent or misflag a process. 16 of the 22 agents were launched for real on one Apple Silicon Mac and their actual process lists are in `--selftest`; the other six (kiro-cli, cline, plandex, openhands, devin, hermes) are covered by their published command lines only. The leftover and idle checks are heuristics. `ps` reports an average CPU figure, not an instant one, and macOS does not always record thermal limits, so "none" does not prove the Mac is not throttled.
-- Built for macOS and tested on a small number of Macs so far (bash 3.2 as shipped with macOS; CI runs `--selftest` on macOS 14 and 15). If it gets something wrong on yours, run `bash yare-doctor.sh --capture > capture.txt` (a process list with arguments trimmed) and attach it to an issue; `--from capture.txt` replays it here.
+- Built for macOS and tested on a small number of Macs so far (bash 3.2 as shipped with macOS; CI runs `--selftest` on macOS 15 (Apple silicon and Intel)). If it gets something wrong on yours, run `bash yare-doctor.sh --capture > capture.txt` (a process list with arguments trimmed) and attach it to an issue; `--from capture.txt` replays it here.
 
 ## About
 

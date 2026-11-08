@@ -1638,7 +1638,7 @@ EOF2
   chk "memory pressure readable" "$([ -n "$(mem_free_pct)" ] && echo ok || echo no)" ok
   chk "disk space readable" "$([ -n "$(disk_free_gb)" ] && echo ok || echo no)" ok
   chk "power settings readable" "$([ -n "$(energy_mode)" ] && echo ok || echo no)" ok
-  chk "open-port listing works" "$(lsof -nP -iTCP -sTCP:LISTEN >/dev/null 2>&1; echo $?)" 0
+  chk "open-port listing works (lsof exits 1 when nothing is listening, which is fine)" "$(lsof -nP -iTCP -sTCP:LISTEN >/dev/null 2>&1; rc=$?; [ "$rc" -le 1 ] && echo 0 || echo "$rc")" 0
   chk "sleep-lock listing works" "$(pmset -g assertions >/dev/null 2>&1; echo $?)" 0
   echo
   if (( fail == 0 )); then
