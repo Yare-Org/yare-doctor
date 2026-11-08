@@ -24,7 +24,7 @@ bash yare-doctor.sh --check         # quiet; exit code 0 nothing to do, 1 worth 
 bash yare-doctor.sh --no-color      # plain text (automatic when piped or when NO_COLOR is set)
 ```
 
-It is about 850 lines of bash. **Read it before you run it**; that is what it is for.
+It is about 900 lines of bash. **Read it before you run it**; that is what it is for.
 
 ## What it looks like
 
@@ -65,13 +65,26 @@ WHO IS USING THE CPU  the owner is the agent session that started it
   llama-server                    ████████   43.3%   13.3 GB  not an agent
 ```
 
+## How CPU is measured (and what 1% means)
+
+CPU is **measured, not read from `ps`**: the script takes two snapshots of every process's cumulative CPU time a moment apart and works out the real load in between. (`ps %cpu` on macOS is an average that lags, so a process that just got busy still shows a few percent.) Numbers use the Activity Monitor convention: **100% is one core**, so on a 14-core Mac a process at 100% is about 7% of the whole machine. The report always says which one it means.
+
+Two things it separates, on purpose:
+
+- **The agent's own processes** (the `claude`, `codex`... process and everything it started) usually use very little CPU, because the model runs on a server. The heavy local load comes from what the agent starts: builds, tests, dev servers.
+- **The app the session runs in** (T3 Code, VS Code, Cursor, JetBrains, a terminal) with all its windows and helper processes. Streaming output and rendering can make the *app* busy while the agent's processes stay near zero, so the report shows the host app next to its sessions and says when the load is in the app rather than the agent.
+
+Processes that no longer have a parent (a dev server an agent left running, or anything that daemonised) cannot be traced back to a session. When one is busy, the report lists it as *detached* and suggests `--why PID` rather than guessing.
+
 ## What it reports
 
 - **What stands out**: a few plain sentences at the top, only about things it actually found.
-- **Agent sessions**: each Claude Code, Codex, OpenCode, Aider, Cursor agent or Gemini session and *everything it started*, with the folder it works in, the app it runs in (Terminal, iTerm, VS Code, T3 Code, tmux, ...), how many files it holds open, how long it has been running, process count, CPU, memory, CPU time used so far, and builds. Activity Monitor lists processes; this groups them by which agent started them.
+- **Agent sessions**: each Claude Code, Codex, OpenCode, Aider, Cursor agent or Gemini session and *everything it started*, with the folder it works in, the app it runs in (Terminal, iTerm, VS Code, T3 Code, tmux, ...), how many files it holds open, how long it has been running, when it last started a process (ACTIVE), process count, CPU, memory, CPU time used so far, and builds. Activity Monitor lists processes; this groups them by which agent started them.
 - **Who is using the CPU and memory right now, and who started it.** If your Mac feels slow, this shows whether it is an agent's tree or something else (often it is not the agent).
 - **Idle helpers**: helper processes inside a session that have been alive over 30 minutes and barely used any CPU, with the memory they hold. (An MCP server waiting for requests looks like this too, so it is a pointer, not a verdict.)
 - **Helpers started many times**: the same helper (for example one MCP server per session) running 3 or more times, and how much memory that adds up to.
+- **Host apps**: the app each session runs in, with all its windows and helpers (CPU, memory, process count), and a note when the app is much busier than the agent inside it.
+- **Detached busy processes**: busy processes with no agent or app above them, which may be background work an agent left running.
 - **Agents inside agents**: nested agent processes (parallel workers) started by a session.
 - **Needs a look**: a process inside a session using 70%+ CPU for 10+ minutes (possible runaway), suspended or zombie processes that still hold memory, and sessions that look forgotten (open 12+ hours, almost no CPU).
 - **Sessions sharing a folder**: two agents working in the same folder share its files and build output, so their builds can collide.
