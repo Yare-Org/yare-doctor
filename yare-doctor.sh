@@ -6,7 +6,7 @@
 #
 # What it does that Activity Monitor does not: it follows the parent chain of every process, so it can say which agent
 # session started what, how much of the Mac each session is holding, who is using the CPU, and what was left behind.
-VERSION="0.1.0"; RELEASED="2026-11-08"
+VERSION="0.1.1"; RELEASED="2026-11-08"
 set -u
 # cron and launchd start scripts with almost no environment: make sure HOME and the system tool folders exist
 if [ -z "${HOME:-}" ]; then HOME=$(dscl . -read "/Users/$(id -un)" NFSHomeDirectory 2>/dev/null | awk '{ print $2 }'); HOME=${HOME:-/var/root}; export HOME; fi
@@ -39,7 +39,7 @@ ${b}SUMMARIES${x}
 
 ${b}AUTOMATION${x}
   ${b}--check${x}          quiet; exit code 0 = nothing to do, 1 = worth a look, 2 = act on it. For scripts and cron.
-  ${b}--limit-mem MB${x}   with --check or --oneline: also fail when agent sessions hold more than this much memory.
+  ${b}--limit-mem MB${x}   with --check (exit code 2) or --oneline (red mark): when agent sessions hold more than this much memory.
   ${b}--limit-cpu PCT${x}  ... when agents and their apps use more than PCT of one core.   ${b}--limit-sessions N${x}  ... more than N sessions.
   ${b}--prom${x}           Prometheus text format, for node_exporter's textfile collector.
   ${b}--json${x}           machine-readable output instead of the report.
@@ -214,17 +214,42 @@ scan() {
   }
   function daemonargs(low) { return (low ~ / --managed-daemon( |$)| --service( |$)| app-server daemon | daemon pid-update-loop|--daemonize/) }
   function nonsession(w) { return (w ~ /^(--version|-v|-version|version|--help|-h|help|login|logout|update|upgrade|doctor|config|completion|install|uninstall|setup-token|migrate-installer|auth|plugin|plugins|mcp)$/) }
-  function agentname(low,   t, n, b, a, i, k, w, lim, seen) {
-    if (index(low, ".app/contents/macos/")) return ""
-    n = split(low, t, " "); b = base(exe0(low))
-    if (isinterp(b)) {
-      lim = (b ~ /^(npx|bunx|pnpx|uvx|uv|pnpm|yarn)$/) ? 6 : 2; seen = 0
-      for (i = 2; i <= n && seen < lim; i++) {
-        if (substr(t[i], 1, 1) == "-") continue
-        seen++; a = canon(stripext(base(t[i])))
-        if (a != "") { k = i; break }
+  # The program an interpreter runs: the script after the interpreter own flags (node --import x script.js), the module after -m
+  # (python -m aider), or the package after a runner flags and subcommands (npx -y pkg, uv tool run x, bun run x). Anything after
+  # that is the program own arguments (node server.js --name claude is not a Claude session). Returns its word number, or 0.
+  function interptarget(t, n, b,   i, w, runner, hops) {
+    runner = (b ~ /^(npx|bunx|pnpx|uvx|uv|pnpm|yarn|bun|deno)$/)
+    for (i = 2; i <= n && hops < 6; i++) {
+      w = t[i]
+      if (w == "-m" && !runner) return (i < n) ? i + 1 : 0
+      if (w ~ /^(-e|--eval|-c|--print)$/ || (w == "-p" && !runner)) return 0
+      if (substr(w, 1, 1) == "-") {
+        if (index(w, "=") == 0 && w ~ /^(-r|--require|--import|--loader|--experimental-loader|--conditions|-C|-W|-X|--from|--with|--with-requirements|-p|--package|--python|--registry|--cwd|--prefix|-w|--workspace|--env-file)$/) i++
+        continue
       }
-      if (a == "") { a = pkgagent(low); k = 2; while (k <= n && substr(t[k], 1, 1) == "-") k++ }
+      if (runner && w ~ /^(run|exec|x|dlx|tool)$/) { hops++; continue }
+      return i
+    }
+    return 0
+  }
+  function agentname(low,   t, n, b, a, i, k, w, tok, rest) {
+    # The Claude desktop app runs Claude Code from its own copy inside an app bundle:
+    # .../Application Support/Claude/claude-code/2.1.317/<hash>/claude.app/Contents/MacOS/claude (the path has a space in it).
+    i = index(low, "/claude.app/contents/macos/claude")
+    if (i && substr(low, 1, i - 1) ~ /\/claude-code\/[0-9][^\/]*\/[^\/]+$/) {
+      rest = substr(low, i + 33); split(rest, t, " ")
+      if (nonsession(t[1]) || daemonargs(low)) return ""
+      return "claude"
+    }
+    if (index(low, ".app/contents/macos/")) return ""
+    n = split(low, t, " "); b = base(exe0(low)); a = ""
+    if (isinterp(b)) {
+      k = interptarget(t, n, b)
+      if (k == 0) { if (low ~ /\.hermes\/hermes-agent/) return "hermes"; return "" }   # inline code (python -c) that loads the Hermes agent
+      tok = t[k]; sub(/@[^\/@]*$/, "", tok)
+      if (t[k - 1] == "-m") sub(/\..*/, "", tok)
+      a = canon(stripext(base(tok)))
+      if (a == "") a = pkgagent(tok)
     } else { a = canon(stripext(b)); k = 1; if (a == "") a = exeagent(exe0(low)) }
     if (a == "") return ""
     if (daemonargs(low)) return ""
@@ -277,9 +302,11 @@ scan() {
     if (l ~ /^iterm/) return "iTerm"
     if (l == "terminal") return "Terminal"
     if (l == "ghostty" || l == "warp" || l == "alacritty" || l == "kitty" || l == "wezterm" || l == "hyper" || l == "tabby" || l == "rio" || l == "zed" || l == "cursor" || l == "windsurf" || l == "xcode" || l == "conductor") return toupper(substr(nm, 1, 1)) substr(nm, 2)
-    if (l ~ /^(visual studio code|code|vscodium|vs code)/) return "VS Code"
+    if (l ~ /^(visual studio code|vscodium|vs code)/ || l == "code" || l ~ /^code - /) return "VS Code"
+    if (l ~ /^codex/) return "Codex"
+    if (l ~ /^claude/) return "Claude"
     if (l ~ /^t3 code/) return "T3 Code"
-    if (l ~ /(idea|pycharm|webstorm|clion|goland|rider|phpstorm|rubymine|datagrip|android studio|fleet|appcode|rustrover)/) return "JetBrains"
+    if (l ~ /^(intellij|idea|pycharm|webstorm|clion|goland|rider|phpstorm|rubymine|datagrip|android studio|studio|fleet|appcode|rustrover|aqua|dataspell|writerside)/) return "JetBrains"
     return nm
   }
   function hostof(pid,   q, s, e, l) {
@@ -369,7 +396,7 @@ scan() {
     for (r in mcpn) printf "MCPS\t%s\t%d\t%d\n", LABEL[r], mcpn[r], mcpm[r]
     # the app each session runs in = the topmost ancestor below launchd; its whole tree counts as the host app of the session
     for (pid in n) { q = pid; for (s = 0; s < 40 && P[q] > 1 && (P[q] in n); s++) q = P[q]; TOPANC[pid] = q }
-    for (i = 1; i <= nroots; i++) { r = roots[i]; if (TOPANC[r] != r) { appset[TOPANC[r]] = 1; appsess[TOPANC[r]]++; appscpu[TOPANC[r]] += 0; appname_of[TOPANC[r]] = hostof(r) } }
+    for (i = 1; i <= nroots; i++) { r = roots[i]; if (TOPANC[r] != r && (index(CMD[TOPANC[r]], ".app/Contents/MacOS/") || hostof(r) !~ /^(-|background)$/)) { appset[TOPANC[r]] = 1; appsess[TOPANC[r]]++; appscpu[TOPANC[r]] += 0; appname_of[TOPANC[r]] = hostof(r) } }
     allcpu = 0; allmem = 0; agcpu = 0; agmem = 0; np = 0; ucpu = 0
     for (pid in n) {
       np++; allcpu += C[pid]; allmem += R[pid] / 1024
@@ -462,7 +489,7 @@ thermal_limit() { pmset -g therm 2>/dev/null | awk '/CPU_Speed_Limit/ { print $N
 # Sums from a scan result
 total() { echo "$SCAN" | awk -F'\t' -v k="$1" -v w="$2" -v col="$3" '$1 == k && (w == "" || $2 == w) { s += $col } END { print s + 0 }'; }
 count() { echo "$SCAN" | awk -F'\t' -v k="$1" '$1 == k { n++ } END { print n + 0 }'; }
-agent_list() { echo "$SCAN" | awk -F'\t' '$1 == "AGENT" { printf "%s%s %d", (n++ ? ", " : ""), $2, $3 } END { if (!n) printf "none" }'; }
+agent_list() { echo "$SCAN" | awk -F'\t' '$1 == "SESS" { split($2, a, "#"); if (!(a[1] in c)) o[++m] = a[1]; c[a[1]]++ } END { for (i = 1; i <= m; i++) printf "%s%s %d", (i > 1 ? ", " : ""), o[i], c[o[i]]; if (!m) printf "none" }'; }
 pct() { awk -v a="$1" -v c="$CORES" 'BEGIN { v = a / c; if (v < 10) printf "%.1f", v; else printf "%.0f", v }'; } # points of ps %CPU -> % of the whole machine
 
 # Listening TCP ports held by processes that belong to an agent session or look left over (lsof only lists, never connects)
@@ -992,15 +1019,17 @@ mem_table() {
 }
 
 footer() {
-  printf '\n%sA rough snapshot, not a benchmark: the idle, leftover and runaway checks are heuristics. CPU is measured over about a second, so a short spike can be missed or caught.%s\n' "$D" "$X"
-  printf '%sTry --watch 60 while an agent builds, --live for a refreshing view, --why PID for who started a process.%s\n' "$D" "$X"
+  local fw=$(( ${COLS:-100} > 100 ? 100 : ${COLS:-100} - 2 ))
+  (( fw < 40 )) && fw=40
+  printf '\n%s%s%s\n' "$D" "$(printf '%s' 'A rough snapshot, not a benchmark: the idle, leftover and runaway checks are heuristics. CPU is measured over about a second, so a short spike can be missed or caught.' | fold -s -w "$fw")" "$X"
+  printf '%s%s%s\n' "$D" "$(printf '%s' 'Try --watch 60 while an agent builds, --live for a refreshing view, --why PID for who started a process.' | fold -s -w "$fw")" "$X"
   if (( SHARE )); then
     section "PASTE-ABLE SUMMARY" "counts only: no paths, user names or commands"
     echo "$1"
   fi
   local age_days; age_days=$(( ( $(date +%s) - $(date -j -f %Y-%m-%d "$RELEASED" +%s 2>/dev/null || date +%s) ) / 86400 ))
   if (( age_days > 120 )); then printf '\n%sThis copy is %s days old (version %s). Newer versions detect more agents; check %s%s\n' "$D" "$age_days" "$VERSION" "https://github.com/Yare-Org/yare-doctor" "$X"; fi
-  printf '\n%sWe would like to hear what it found. Yare is an early prototype Mac tool, not released yet: %s%s%s%s\n' "$D" "$X$C$U" "$LINK" "$X" ""
+  printf '\n%sWe would like to hear what it found. Yare is an early prototype Mac tool, not released yet:%s\n%s%s%s%s\n' "$D" "$X" "$C$U" "$LINK" "$X" ""
 }
 
 snapshot() {
@@ -1188,10 +1217,11 @@ why() {
   local out; out=$(real_procs | uawk -v t="$WHY_PID" "$AWKLIB"'
     function etsecs(x,   d, y, p, n) { d = 0; if (index(x, "-")) { split(x, y, "-"); d = y[1]; x = y[2] }; n = split(x, p, ":"); if (n == 3) return d*86400 + p[1]*3600 + p[2]*60 + p[3]; if (n == 2) return d*86400 + p[1]*60 + p[2]; return d*86400 + p[1] }
     function human(v,   d, h, m) { d = int(v / 86400); h = int((v % 86400) / 3600); m = int((v % 3600) / 60); if (d > 0) return d "d " h "h"; if (h > 0) return h "h " m "m"; return m "m" }
+    function shortpath(x,   q, m) { m = split(x, q, "/"); if (length(x) <= 28) return x; return (m > 2 && length(q[m - 1] "/" q[m]) <= 30) ? ".../" q[m - 1] "/" q[m] : q[m] }
     function short(c,   a, k, o, i, r, n, j) {
       j = index(c, ".app/Contents/MacOS/"); if (j) { r = substr(c, j + 20); sub(/ -.*/, "", r); return substr(r, 1, 40) }
       k = split(c, a, " "); n = split(a[1], o, "/"); r = o[n]
-      for (i = 2; i <= k && i <= 3; i++) r = r " " ((a[i] ~ /\//) ? substr(a[i], length(a[i]) - 24) : a[i])
+      for (i = 2; i <= k && i <= 3; i++) r = r " " ((a[i] ~ /\//) ? shortpath(a[i]) : a[i])
       return substr(r, 1, 60)
     }
     { P[$1] = $2; C[$1] = $4; R[$1] = $5; E[$1] = $6; cmd = ""; for (i = 8; i <= NF; i++) cmd = cmd (i > 8 ? " " : "") $i; N[$1] = cmd }
@@ -1356,6 +1386,22 @@ EOF
   det -             '/Users/me/.codex/packages/app-server-daemon/releases/0.166.0-aarch64-apple-darwin/bin/codex app-server daemon pid-update-loop'
   det -             '/Users/me/.opencode/bin/opencode serve --service'
   det claude        'claude --resume'
+  det claude        '/Users/me/Library/Application Support/Claude/claude-code/2.1.317/91184d3d9ba3/claude.app/Contents/MacOS/claude --output-format stream-json --verbose'
+  det -             '/Users/me/Library/Application Support/Claude/claude-code/2.1.317/91184d3d9ba3/claude.app/Contents/MacOS/claude --version'
+  det -             '/Applications/Claude.app/Contents/MacOS/Claude'
+  det -             'node /Users/me/app/server.js --name claude'
+  det -             'python3 /Users/me/tools/report.py --agent codex'
+  det -             'node /Users/me/app/index.js gemini'
+  det -             'node -e console.log("claude")'
+  det -             'python3 -c print("aider")'
+  det aider         'python3 -m aider --model sonnet'
+  det aider         '/Users/me/venv/bin/python3 -m aider'
+  det claude        'node --max-old-space-size=8192 --import tsx /Users/me/.nvm/versions/node/v22.1.0/lib/node_modules/@anthropic-ai/claude-code/cli.js'
+  det claude        'npx -y @anthropic-ai/claude-code@latest'
+  det codex         'bunx @openai/codex@0.1.2'
+  det aider         'uvx --from aider-chat aider'
+  det aider         'uv tool run aider'
+  det gemini        'bun run /Users/me/.bun/bin/gemini'
   det claude        '/Users/me/.local/bin/claude --output-format stream-json --verbose'
   det claude        'node /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js'
   det claude        '/Applications/T3 Code (Beta).app/Contents/Resources/bin/claude --model x'
@@ -1479,9 +1525,39 @@ EOF3
 60 1 S 0.0 1000 02:00:00 00:00.10 /Applications/Nimbalyst.app/Contents/MacOS/Nimbalyst
 61 60 S 0.0 9000 02:00:00 00:01.00 claude
 EOF3
+  hostchk Codex <<'EOF3'
+80 1 S 0.0 1000 02:00:00 00:00.10 /Applications/Codex.app/Contents/MacOS/Codex
+81 80 S 0.0 9000 02:00:00 00:01.00 /Applications/Codex.app/Contents/Resources/codex app-server --listen stdio
+EOF3
+  hostchk Claude <<'EOF3'
+82 1 S 0.0 1000 02:00:00 00:00.10 /Applications/Claude.app/Contents/MacOS/Claude
+83 82 S 0.0 1000 02:00:00 00:00.10 /Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper --type=utility
+84 82 S 0.0 9000 02:00:00 00:01.00 /Users/me/Library/Application Support/Claude/claude-code/2.1.317/91184d3d9ba3/claude.app/Contents/MacOS/claude --output-format stream-json
+EOF3
+  hostchk "Provider" <<'EOF3'
+85 1 S 0.0 1000 02:00:00 00:00.10 /Applications/Provider.app/Contents/MacOS/Provider
+86 85 S 0.0 9000 02:00:00 00:01.00 claude
+EOF3
+  hostchk Zed <<'EOF3'
+87 1 S 0.0 1000 02:00:00 00:00.10 /Applications/Zed.app/Contents/MacOS/zed
+88 87 S 0.0 1000 02:00:00 00:00.10 /bin/zsh -l
+89 88 S 0.0 9000 02:00:00 00:01.00 gemini
+EOF3
   hostchk background <<'EOF3'
 70 1 S 0.0 9000 02:00:00 00:01.00 claude -p run the nightly job
 EOF3
+  # a capture replayed with --from detects the same agents, and its masking leaves no secret behind
+  local capf; capf=$(mktemp)
+  printf '%s\n' '10 1 S 0.0 1000 02:00:00 00:00.10 /usr/local/bin/node --max-old-space-size=8192 /Users/me/SECRETPROJ/node_modules/@google/gemini-cli/dist/index.js --token=hunter2' \
+    '11 1 S 0.0 1000 02:00:00 00:00.10 /Users/me/.hermes/tools/py/bin/python3 -I -c import sys\012sys.path.insert(0, /Users/me/.hermes/hermes-agent)' \
+    '12 1 S 0.0 1000 02:00:00 00:00.10 psql postgres://user:hunter2@db.internal/prod' '13 1 S 0.0 1000 02:00:00 00:00.10 /Users/me/.local/bin/claude -p summarize SECRETPROJ' > "$capf"
+  procs() { cat "$capf"; }
+  capture_mode > "$capf.cap"
+  chk "--capture drops private words (secrets, project names)" "$(cut -d' ' -f8- "$capf.cap" | grep -c 'hunter2\|SECRETPROJ')" 0
+  procs() { cat "$capf.cap"; }
+  INSTANT=0; got=$(scan | awk -F'\t' '$1 == "SESS" { n++ } END { print n + 0 }'); INSTANT=1
+  chk "a capture replayed with --from finds the same sessions" "$got" 3
+  rm -f "$capf" "$capf.cap"
   procs() { printf '%s\n' '900 1 S 0.0 9000 01:00:00 00:01.00 claude' '50 1 S 0.0 9000 05:00 00:01.00 claude'; }
   INSTANT=0; got=$(scan | awk -F'\t' '$1 == "SESS" && $2 == "claude#1" { print $3 }'); INSTANT=1
   chk "oldest session is #1 even with a higher pid" "$got" 900
@@ -1694,12 +1770,49 @@ vibe() {
 # Keeps pid, parent, state, CPU, memory, times and the first four words of each command. Your home folder becomes ~, any
 # word containing "=" becomes <arg>, long words are cut. Read it before you share it; nothing is sent anywhere.
 capture_mode() {
-  real_procs | awk -v home="$HOME" '{
-    out = $1 " " $2 " " $3 " " $4 " " $5 " " $6 " " $7
+  # Every command line is kept in shape (so --from FILE detects the same sessions) but anything that could be private is masked:
+  # words that are not a known agent, subcommand or ordinary system folder become <arg> or _, and flag values are dropped.
+  procs | awk -v home="$HOME" '
+  function safeseg(s,   l) {
+    sub(/@[^\/@]*$/, "", s); l = tolower(s)
+    if (s == "" || s == "~" || s == "." || s == "..") return 1
+    if (l ~ /^v?[0-9]+(\.[0-9a-z]+)+(-[a-z0-9.]+)?$/) return 1
+    if (l ~ /\.app$/) return 1
+    if (l ~ /^(usr|local|bin|sbin|lib|lib64|libexec|opt|homebrew|cellar|node_modules|applications|library|system|private|var|tmp|share|versions|releases|dist|contents|macos|resources|frameworks|venv|site-packages|node|nodejs|npm|npx|bun|uv|tools|packages|plugins|cache|vendor|current|latest|stable|extensions|helpers|helper|app|build|index|cli|main|bin\.js|index\.js|cli\.js|main\.js|cli\.mjs|index\.mjs|aarch64-apple-darwin|x86_64-apple-darwin|python[0-9.]*|application|support|nvm|asdf|pyenv|volta|fnm|deno|cargo|mise|n|pnpm|yarn)$/) return 1
+    if (l ~ /^\.(local|nvm|npm|npm-global|bun|cargo|claude|codex|hermes|opencode|continue|config|cache|volta|asdf|pyenv|fnm|deno|cursor|bin|kilocode|augment|qwen|factory|goose|amp|gemini|aider|kimi|copilot|kiro|cline|crush|plandex|openhands|devin|npm-packages|yarn|pnpm)$/) return 1
+    if (l ~ /^@(anthropic-ai|openai|google|github|sourcegraph|qwen-code|augmentcode|charmland|continuedev|kilocode|zed-industries|agentclientprotocol)$/) return 1
+    if (l ~ /^(claude|codex|gemini|opencode|aider|cursor-agent|amp|goose|crush|droid|qwen|kiro|kiro-cli|copilot|hermes|hermes-agent|hermes_cli|auggie|cline|plandex|openhands|kimi|devin|kilo|kilocode|continue)(-code|-cli|-agent|-ai|-chat|-sdk|-acp|-darwin-arm64|-darwin-x64|-darwin-universal)*(\.(js|mjs|cjs|exe|py))?$/) return 1
+    return 0
+  }
+  function known(w,   l) {
+    l = tolower(w)
+    return (l ~ /^(claude|codex|gemini|opencode|aider|cursor-agent|amp|goose|crush|droid|qwen|kiro|kiro-cli|copilot|hermes|auggie|cline|plandex|openhands|kimi|devin|kilo|kilocode|continue|claude-code|codex-cli|gemini-cli|qwen-code|opencode-ai|aider-chat|kimi-cli|cn|login|logout|update|upgrade|doctor|config|completion|install|uninstall|setup-token|migrate-installer|auth|plugin|plugins|mcp|version|help|session|run|web|acp|serve|app-server|daemon|pid-update-loop|exec|x|dlx|tool|resume|chat|tui|listen|stdio|start|build|test|dev|watch|install|add|remove|npm|node|bun|deno|python|python3)$/)
+  }
+  function sw(w,   n, p, i, o) {
+    if (substr(w, 1, 1) == "-") {
+      if (index(w, "=")) return substr(w, 1, index(w, "=")) "<arg>"
+      if (w ~ /^--[A-Za-z0-9][A-Za-z0-9-]*$/ || w ~ /^-[A-Za-z0-9]$/) return w
+      return "-<arg>"
+    }
+    if (index(w, "/")) {
+      n = split(w, p, "/"); o = ""
+      for (i = 1; i <= n; i++) o = o (i > 1 ? "/" : "") (safeseg(p[i]) ? p[i] : "_")
+      return o
+    }
+    if (known(w)) return w
+    return "<arg>"
+  }
+  { out = $1 " " $2 " " $3 " " $4 " " $5 " " $6 " " $7
     line = ""; for (i = 8; i <= NF; i++) line = line (i > 8 ? " " : "") $i
     gsub(home, "~", line)
     n = split(line, t, " "); cmd = ""
-    for (k = 1; k <= n && k <= 4; k++) { w = t[k]; if (k > 1 && index(w, "=")) w = "<arg>"; if (length(w) > 90) w = substr(w, 1, 87) "..."; cmd = cmd (k > 1 ? " " : "") w }
+    for (k = 1; k <= n && k <= 12; k++) {
+      w = sw(t[k])
+      if (k == 1 && !index(t[k], "/") && t[k] ~ /^[A-Za-z0-9._+-]+$/) w = t[k]   # the program name itself is not private
+      if (k == 1 && index(t[k], "/")) { m = split(t[k], q, "/"); sub(/\/[^\/]*$/, "", w); w = w "/" q[m] }   # the program name itself is not private
+      cmd = cmd (k > 1 ? " " : "") w
+    }
+    if (index(line, ".hermes/hermes-agent") && !index(cmd, "hermes-agent")) cmd = cmd " ~/.hermes/hermes-agent"
     print out " " cmd }'
 }
 
@@ -1868,9 +1981,11 @@ rules_mode() {
   copilot  hermes  auggie  cline  plandex  openhands  kimi  devin  kilo  continue
 
   - Also found when launched through node, bun, deno, python, ruby, uv, uvx, npx, bunx or pnpm,
-    for example `node .../@google/gemini-cli/...` or `python -m aider`.
+    for example `node .../@google/gemini-cli/...` or `python -m aider`. Only the script or module the interpreter
+    runs counts; its arguments never do (`node server.js --name claude` is not a Claude session).
   - Desktop apps (the Contents/MacOS binary of Claude.app, Codex.app, Cursor.app ...) are hosts, not agents.
-    An agent inside an app bundle (Contents/Resources/.../codex) still counts.
+    An agent inside an app bundle still counts: Contents/Resources/.../codex, and the claude.app that the
+    Claude desktop app runs for its Code tab (.../Claude/claude-code/VERSION/HASH/claude.app).
   - Not a session: --version, --help, login, logout, update, upgrade, doctor, config, completion, install,
     mcp, auth, plugin. `goose` counts only for session / run / web / acp; `hermes` only for the Hermes agent.
   - Helper processes of apps (--type=, "helper") are never agents. This script and its own tools are ignored.
@@ -1937,7 +2052,7 @@ tree_mode() {
     END {
       for (s = 1; s <= ns; s++) {
         l = sl[s]; if (want != "" && l != want) continue
-        printf "\n%s%s%s%s%s  %s%s %s %s processes %s %s%s\n", scol(l), BLD, l, RST, "", DIM, shost[l], MID, sproc[l], MID, mb(smem[l]), RST
+        printf "\n%s%s%s%s%s  %s%s %s %s %s %s %s%s\n", scol(l), BLD, l, RST, "", DIM, shost[l], MID, sproc[l], (sproc[l] == 1 ? "process" : "processes"), MID, mb(smem[l]), RST
         # the session root is the process whose parent is not part of the session
         for (pid in own) if (own[pid] == l && !(ppid[pid] in own && own[ppid[pid]] == l)) show(pid, "", 1, 0)
       }
