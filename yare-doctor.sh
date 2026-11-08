@@ -1,12 +1,12 @@
 #!/bin/bash
 # yare-doctor: read-only check of what your coding agents are running on this Mac.
-# Uses only `ps`, `sysctl`, `memory_pressure`, `pmset` and `lsof` (listing, never connecting). No network, no files
+# Uses only `ps`, `sysctl`, `memory_pressure`, `pmset`, `df`, `sw_vers` and `lsof` (listing, never connecting). No network, no files
 # written, nothing killed or changed. Early prototype helper from the Yare project. It reports; it does not claim a speed-up.
 # Works with the bash that ships with macOS (3.2).
 #
 # What it does that Activity Monitor does not: it follows the parent chain of every process, so it can say which agent
 # session started what, how much of the Mac each session is holding, who is using the CPU, and what was left behind.
-VERSION="0.3.0"
+VERSION="0.4.0"
 set -u
 
 usage() {
@@ -18,11 +18,13 @@ yare-doctor: what are your coding agents doing to this Mac? (read-only)
                                       at the same time as one of yours, and how long the Mac was squeezed by agents
   bash yare-doctor.sh --share         add one line with counts only (no paths, user names or commands) to paste in a reply
   bash yare-doctor.sh --json          machine-readable counts instead of the report
+  bash yare-doctor.sh --selftest      check that every part works on this Mac (a few seconds); prints a line to paste if not
   bash yare-doctor.sh --version
 
-The report shows: what stands out, each agent session with everything it started (CPU, memory, CPU used so far, helpers
-sitting idle), who is using the CPU right now and which agent started it, helper programs started many times over,
-ports that agent sessions are holding open, builds split into the agent's and yours, and leftovers from ended sessions.
+The report shows: what stands out, each agent session with the folder it works in and everything it started (CPU, memory,
+CPU used so far, builds, idle helpers), who is using the CPU and memory right now and which agent started it, runaway or
+suspended processes, helper programs started many times over, ports and sleep locks that agent sessions hold, builds split
+into the agent's and yours, leftovers from ended sessions, and Mac limits (battery, disk, open files, processes).
 
 It never changes anything: no network, no files, nothing is stopped. Read it first, it is short.
 EOF
@@ -34,6 +36,7 @@ while [ $# -gt 0 ]; do
     --watch) MODE=watch; if [[ ${2:-} =~ ^[0-9]+$ ]]; then WATCH_SECS=$2; shift; fi ;;
     --share) SHARE=1 ;;
     --json) JSON=1 ;;
+    --selftest) MODE=selftest ;;
     --version) echo "yare-doctor $VERSION"; exit 0 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1 (try --help)" >&2; exit 2 ;;
@@ -52,14 +55,19 @@ TAB=$'\t'
 # ancestor), so one agent session = the agent plus everything below it. Prints tab-separated lines:
 #   TOT allcpu allmemMB agentcpu agentmemMB nprocs         whole machine vs. everything inside agent sessions
 #   AGENT name count cpu% memMB                            agent processes by name
-#   SESS label rootpid age procs cpu% memMB cpuminutes idlecount idleMB    one line per agent session
+#   SESS label rootpid age procs cpu% memMB cpuminutes idlecount idleMB builds forgotten stopped   one line per agent session
+#   RUN pid owner cpu% age name        a process inside a session at 70%+ CPU for 10+ minutes (possible runaway)
+#   STUCK pid owner state name         suspended (stopped) or zombie process inside a session
+#   MEM pid owner memMB name           processes holding 300 MB or more, with the owner
 #   TOP pid owner cpu% memMB name                          processes using CPU, with the agent session that owns them
 #   BUILD agent|own count cpu%                             builds and tests, by whether an agent started them
 #   DUP signature count memMB sessions                     the same helper started 3+ times inside agent sessions
 #   LEFT pid cpu% memMB elapsed command                    helpers with no parent that look left over from ended sessions
 #   MAP pid owner                                          processes owned by a session or left over (to match ports)
+real_procs() { ps -axo pid=,ppid=,stat=,pcpu=,rss=,etime=,time=,command= 2>/dev/null; }
+procs() { real_procs; }
 scan() {
-  ps -axo pid=,ppid=,pcpu=,rss=,etime=,time=,command= 2>/dev/null | awk '
+  procs | awk '
   function etsecs(t,   d, x, p, n) {
     d = 0
     if (index(t, "-")) { split(t, x, "-"); d = x[1]; t = x[2] }
@@ -91,7 +99,8 @@ scan() {
   function isbuild(low,   t, b) {
     split(low, t, " "); b = base(t[1])
     if (b ~ /^(clang|clang\+\+|cc1|swiftc|swift-frontend|swift-build|rustc|cargo|tsc|xcodebuild|gradle|make|ninja|webpack|esbuild|vite|ld)$/) return 1
-    if (low ~ /node .*(jest|vitest|mocha|--test)/) return 1
+    if (b ~ /^(xctest|swift-test|swiftpm-testing-helper|pytest)$/) return 1
+    if (low ~ /node .*(jest|vitest|mocha|--test)/ || low ~ /(python|python3) .*(pytest|py\.test)/) return 1
     return 0
   }
   function appname(cmd,   i, s, t) {
@@ -108,11 +117,11 @@ scan() {
   }
   {
     cmd = ""
-    for (i = 7; i <= NF; i++) cmd = cmd (i > 7 ? " " : "") $i
+    for (i = 8; i <= NF; i++) cmd = cmd (i > 8 ? " " : "") $i
     low = tolower(cmd)
     split(low, ft, " "); fb = base(ft[1])
     if (low ~ /yare-doctor/ || fb ~ /^(ps|awk|sort|lsof|pmset|sysctl|memory_pressure|bc|sleep|head|tr|sed|date)$/) next
-    pid = $1; P[pid] = $2; C[pid] = $3 + 0; R[pid] = $4; E[pid] = $5; T[pid] = $6; CMD[pid] = cmd; LOW[pid] = low
+    pid = $1; P[pid] = $2; ST[pid] = $3; C[pid] = $4 + 0; R[pid] = $5; E[pid] = $6; T[pid] = $7; CMD[pid] = cmd; LOW[pid] = low
     n[pid] = 1
     if (low ~ /--type=|helper/) HELP[pid] = 1
   }
@@ -144,22 +153,27 @@ scan() {
       agcpu += C[pid]; agmem += R[pid] / 1024
       age = etsecs(E[pid])
       if (pid != r && !(pid in HELP) && age > 1800 && C[pid] < 1 && cpusecs(T[pid]) / age < 0.005) { idn[r]++; idm[r] += R[pid] / 1024 }
+      if (pid != r && !(pid in HELP) && substr(ST[pid], 1, 1) ~ /[TZ]/) { stp[r]++; stuck = stuck sprintf("STUCK\t%s\t%s\t%s\t%s\n", pid, LABEL[r], substr(ST[pid], 1, 1), appname(CMD[pid])) }
+      if (pid != r && !(pid in HELP) && C[pid] >= 70 && age > 600) runaway = runaway sprintf("RUN\t%s\t%s\t%.1f\t%s\t%s\n", pid, LABEL[r], C[pid], human(age), appname(CMD[pid]))
     }
+    printf "%s%s", stuck, runaway
     printf "TOT\t%.1f\t%d\t%.1f\t%d\t%d\n", allcpu, allmem, agcpu, agmem, np
     for (i = 1; i <= nroots; i++) {
       r = roots[i]
-      printf "SESS\t%s\t%s\t%s\t%d\t%.1f\t%d\t%d\t%d\t%d\n", LABEL[r], r, human(etsecs(E[r])), sp[r], scpu[r], smem[r], stime[r] / 60, idn[r] + 0, idm[r] + 0
+      forgot = (etsecs(E[r]) > 43200 && scpu[r] < 0.5) ? 1 : 0
+      printf "SESS\t%s\t%s\t%s\t%d\t%.1f\t%d\t%d\t%d\t%d\t%d\t%d\t%d\n", LABEL[r], r, human(etsecs(E[r])), sp[r], scpu[r], smem[r], stime[r] / 60, idn[r] + 0, idm[r] + 0, sb[r] + 0, forgot, stp[r] + 0
     }
 
     for (pid in n) {
       owner = (ROOT[pid] != "") ? LABEL[ROOT[pid]] : "-"
       if (C[pid] >= 1.0) printf "TOP\t%s\t%s\t%.1f\t%d\t%s\n", pid, owner, C[pid], R[pid] / 1024, appname(CMD[pid])
+      if (R[pid] / 1024 >= 300) printf "MEM\t%s\t%s\t%d\t%s\n", pid, owner, R[pid] / 1024, appname(CMD[pid])
     }
 
     for (pid in n) {
       if ((pid in HELP) || !isbuild(LOW[pid])) continue
       ow = (ROOT[pid] != "") ? "agent" : "own"
-      bc[ow]++; bcpu[ow] += C[pid]
+      bc[ow]++; bcpu[ow] += C[pid]; if (ROOT[pid] != "") sb[ROOT[pid]]++
     }
     printf "BUILD\tagent\t%d\t%.1f\n", bc["agent"], bcpu["agent"]
     printf "BUILD\town\t%d\t%.1f\n", bc["own"], bcpu["own"]
@@ -215,10 +229,34 @@ ports() {
       if (!(k in seen)) { seen[k] = 1; printf "%s\t%s\t%s\n", $1, name, own[$2] } }' <(echo "$map") <(lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null)
 }
 
+# Folder each session works in: the current directory of the agent process (lsof only lists it, nothing is opened)
+folders() {
+  local pids; pids=$(echo "$SCAN" | awk -F'\t' '$1 == "SESS" { printf "%s%s", (n++ ? "," : ""), $3 }')
+  [ -z "$pids" ] && return
+  lsof -a -d cwd -Fpn -p "$pids" 2>/dev/null | awk '/^p/ { pid = substr($0, 2) } /^n/ { printf "%s\t%s\n", pid, substr($0, 2) }'
+}
+
+# What is keeping the Mac from sleeping, and which agent session started it (pmset only lists)
+awake() {
+  local map; map=$(echo "$SCAN" | awk -F'\t' '$1 == "MAP" { print $2 " " $3 }')
+  awk 'NR == FNR { own[$1] = $2; next }
+    /^ *pid [0-9]+\(/ && ($5 ~ /^(PreventUserIdleSystemSleep|PreventSystemSleep|NoIdleSleepAssertion|PreventUserIdleDisplaySleep|NoDisplaySleepAssertion)$/) {
+      pid = $2; sub(/\(.*/, "", pid); name = $2; sub(/^[0-9]+\(/, "", name); sub(/\).*/, "", name)
+      if (name == "powerd" || name == "coreaudiod") next
+      kind = ($5 ~ /Display/) ? "screen" : "system"; k = pid SUBSEP kind; if (k in seen) next; seen[k] = 1
+      printf "%s\t%s\t%s\t%s\n", name, kind, $4, ((pid in own) ? own[pid] : "-") }' <(printf '%s\n' "$map") <(pmset -g assertions 2>/dev/null)
+}
+
+disk_free_gb() { df -k "$HOME" 2>/dev/null | awk 'NR == 2 { printf "%d", $4 / 1048576 }'; }
+power_source() { pmset -g batt 2>/dev/null | awk -F"'" '/Now drawing/ { print ($2 ~ /Battery/ ? "battery" : "plug"); exit }'; }
+battery_pct() { pmset -g batt 2>/dev/null | awk '/InternalBattery/ { for (i = 1; i <= NF; i++) if ($i ~ /%;?$/) { v = $i; gsub(/[%;]/, "", v); print v; exit } }'; }
+macos_info() { echo "macOS $(sw_vers -productVersion 2>/dev/null), $(sysctl -n machdep.cpu.brand_string 2>/dev/null)"; }
+limits() { echo "$(sysctl -n kern.num_files 2>/dev/null || echo 0) $(sysctl -n kern.maxfiles 2>/dev/null || echo 0) $(sysctl -n kern.maxproc 2>/dev/null || echo 0)"; }
+
 LINK="https://meetyare.vercel.app/?utm_source=doctor&utm_medium=tool&utm_campaign=output"
 
 share_line() { # $1 = extra text
-  echo "Yare doctor v$VERSION: $CPUS cores, ${MEM_GB} GB. Agents: $(agent_list) in ${SESS_N} sessions, using ${AG_PCT}% of CPU and ${AG_MB} MB. Builds: $B_AGENT started by agents, $B_OWN not. Load ${LOAD:-?}, swap ${SWAP:-?}, ${LEFT_N} possible leftovers, ${IDLE_N} idle helpers (${IDLE_MB} MB), ${DUP_N} repeated helpers, ${PORT_N} ports held by agent sessions.${1:-}"
+  echo "Yare doctor v$VERSION ($OSINFO): $CPUS cores, ${MEM_GB} GB. Agents: $(agent_list) in ${SESS_N} sessions, using ${AG_PCT}% of CPU and ${AG_MB} MB. Builds: $B_AGENT started by agents, $B_OWN not. Load ${LOAD:-?}, swap ${SWAP:-?}, ${LEFT_N} possible leftovers, ${IDLE_N} idle helpers (${IDLE_MB} MB), ${DUP_N} repeated helpers, ${PORT_N} ports held, ${RUN_N} possible runaways, ${STUCK_N} suspended, ${FORGOT_N} forgotten sessions, ${AWAKE_N} sleep locks by agents, ${SHARED_N} shared folders.${1:-}"
 }
 
 NOTES=""
@@ -229,11 +267,17 @@ gather() { # fills the globals the report and the share line use, from $SCAN
   A_N=$(total AGENT "" 3); A_CPU=$(total AGENT "" 4); A_MEM=$(total AGENT "" 5)
   B_AGENT=$(total BUILD agent 3); B_AGENT_CPU=$(total BUILD agent 4)
   B_OWN=$(total BUILD own 3); B_OWN_CPU=$(total BUILD own 4)
-  LEFT_N=$(count LEFT); SESS_N=$(count SESS); DUP_N=$(count DUP)
-  ALL_CPU=$(total TOT "" 2); AG_CPU=$(total TOT "" 4); AG_MB=$(total TOT "" 5)
+  LEFT_N=$(count LEFT); SESS_N=$(count SESS); DUP_N=$(count DUP); RUN_N=$(count RUN); STUCK_N=$(count STUCK)
+  ALL_CPU=$(total TOT "" 2); AG_CPU=$(total TOT "" 4); AG_MB=$(total TOT "" 5); P_NOW=$(total TOT "" 6)
   AG_PCT=$(pct "$AG_CPU"); ALL_PCT=$(pct "$ALL_CPU")
-  IDLE_N=$(total SESS "" 9); IDLE_MB=$(total SESS "" 10)
+  IDLE_N=$(total SESS "" 9); IDLE_MB=$(total SESS "" 10); FORGOT_N=$(total SESS "" 12)
   PORTS=$(ports); PORT_N=$(echo "$PORTS" | awk 'NF { n++ } END { print n + 0 }')
+  FOLDERS=$(folders)
+  SHARED=$(echo "$FOLDERS" | awk -F'\t' -v h="$HOME" 'NF == 2 && $2 != "/" && $2 != h { c[$2]++ } END { for (p in c) if (c[p] > 1) { n = split(p, a, "/"); print c[p] "\t" a[n] } }')
+  SHARED_N=$(echo "$SHARED" | awk 'NF { n++ } END { print n + 0 }')
+  AWAKE=$(awake); AWAKE_N=$(echo "$AWAKE" | awk -F'\t' 'NF && $4 != "-" { n++ } END { print n + 0 }')
+  DISK=$(disk_free_gb); PSRC=$(power_source); BATT=$(battery_pct); OSINFO=$(macos_info)
+  read -r F_OPEN F_MAX P_MAX <<< "$(limits)"
 }
 
 stand_out() { # builds NOTES from what gather found
@@ -242,6 +286,16 @@ stand_out() { # builds NOTES from what gather found
     note "$SESS_N agent session(s) are running. Together they and everything they started use about ${AG_PCT}% of this Mac's CPU and $AG_MB MB of memory."
   fi
   if awk -v p="$AG_PCT" 'BEGIN { exit !(p >= 25) }'; then note "Agents are using a quarter or more of the CPU right now, so your own builds are sharing the machine with them."; fi
+  local line
+  while IFS=$'\t' read -r _ pid owner cpu age name; do
+    [ -n "${pid:-}" ] && note "$name (pid $pid, started by $owner) is using ${cpu}% CPU and has been running $age. It may be stuck in a loop."
+  done <<< "$(echo "$SCAN" | awk -F'\t' '$1 == "RUN"')"
+  if (( STUCK_N > 0 )); then note "$STUCK_N process(es) inside agent sessions are suspended or zombies. A suspended one still holds its memory."; fi
+  line=$(echo "$SCAN" | awk -F'\t' '$1 == "SESS" && $12 == 1 { printf "%s%s (open %s, %d MB)", (n++ ? "; " : ""), $2, $4, $7 }')
+  if [ -n "$line" ]; then note "Looks forgotten (open over 12 hours, almost no CPU used): $line. Closing it would free that memory."; fi
+  if (( SHARED_N > 0 )); then
+    note "More than one agent session is working in the same folder: $(echo "$SHARED" | awk -F'\t' '{ printf "%s%s (%d sessions)", (n++ ? ", " : ""), $2, $1 }'). They share its files and build output, so their builds can collide."
+  fi
   if (( IDLE_N > 0 && IDLE_MB >= 100 )); then
     note "$IDLE_N helper process(es) inside agent sessions have been alive over 30 minutes and barely used any CPU, holding $IDLE_MB MB. (MCP servers waiting for requests look like this too, so it is not always a problem.)"
   fi
@@ -250,13 +304,25 @@ stand_out() { # builds NOTES from what gather found
     note "The same helper was started $(echo "$top" | cut -f3) times across $(echo "$top" | cut -f5) place(s) inside agent sessions: $(echo "$top" | cut -f2) ($(echo "$top" | cut -f4) MB in total). Often that is one tool per session, which adds up."
   fi
   if (( PORT_N > 0 )); then note "Agent sessions (or things they left behind) are holding $PORT_N listening port(s) open. A new dev server on the same port can fail."; fi
+  if (( AWAKE_N > 0 )); then note "$AWAKE_N thing(s) started by agent sessions are keeping this Mac from sleeping."; fi
   if (( LEFT_N > 0 )); then note "$LEFT_N helper process(es) look left over from sessions that ended."; fi
   if (( B_AGENT > 0 && B_OWN > 0 )); then note "An agent's build and a build that is not an agent's are running at the same time right now."; fi
+  # Slowness that is not the agents' doing: name the busiest background process when it is a known macOS or sync service
+  top=$(echo "$SCAN" | awk -F'\t' '$1 == "TOP" && $3 == "-" && $4 >= 15 && $6 ~ /^(mds|mds_stores|mdworker|mdworker_shared|backupd|photoanalysisd|photolibraryd|cloudd|fileproviderd|syspolicyd|trustd|kernel_task|XprotectService|XProtect|Dropbox|OneDrive|Google Drive)/' | sort -t"$TAB" -k4 -nr | head -1)
+  if [ -n "$top" ]; then
+    note "$(echo "$top" | cut -f6) is using $(echo "$top" | cut -f4)% CPU and it is not an agent. If your Mac feels slow, this may be the cause."
+    case $(echo "$top" | cut -f6) in mds*|mdworker*) note "Spotlight indexes folders that agents write into (node_modules, build output). Excluding them in System Settings > Spotlight can help." ;; esac
+  fi
   if [ "$ENERGY" = low ]; then note "Low Power Mode is on. macOS slows CPU-heavy work such as builds in that mode."; fi
+  if [ "${PSRC:-}" = battery ]; then note "The Mac is on battery${BATT:+ (${BATT}%)}. Builds and agents drain it fast, and macOS may slow them down."; fi
   if [[ ${THERM:-100} =~ ^[0-9]+$ ]] && (( ${THERM:-100} < 100 )); then note "macOS has recorded a CPU speed limit of ${THERM}% (heat or power). The Mac is running slower than normal."; fi
+  if [[ ${DISK:-99} =~ ^[0-9]+$ ]] && (( ${DISK:-99} < 20 )); then note "Only ${DISK} GB of disk is free. Builds, swap and caches can fail or slow down when the disk is this full."; fi
+  if (( ${F_MAX:-0} > 0 && ${F_OPEN:-0} * 100 / ${F_MAX:-1} >= 60 )); then note "The Mac has ${F_OPEN} files open out of a limit of ${F_MAX}. Agents and file watchers can hit that limit (errors like 'too many open files')."; fi
+  if (( ${P_MAX:-0} > 0 && ${P_NOW:-0} * 100 / ${P_MAX:-1} >= 60 )); then note "${P_NOW} processes are running out of a limit of ${P_MAX}. New processes can fail to start near the limit."; fi
   local swap_mb; swap_mb=$(echo "${SWAP:-0}" | awk '/G/ { v = $1; sub(/G/, "", v); print int(v * 1024); next } { v = $1; sub(/M/, "", v); print int(v) }')
   if [[ ${swap_mb:-0} =~ ^[0-9]+$ ]] && (( ${swap_mb:-0} >= 2048 )) && [[ ${FREE:-100} =~ ^[0-9]+$ ]] && (( ${FREE:-100} < 30 )); then
-    note "Swap use is ${SWAP} and free memory is ${FREE}%. The Mac is short of memory."
+    local big; big=$(echo "$SCAN" | awk -F'\t' '$1 == "MEM"' | sort -t"$TAB" -k4 -nr | head -1)
+    note "Swap use is ${SWAP} and free memory is ${FREE}%. The Mac is short of memory.${big:+ The biggest holder is $(echo "$big" | cut -f5) at $(echo "$big" | cut -f4) MB ($(echo "$big" | cut -f3 | sed 's/^-$/not an agent/'))}."
   fi
   if [ -z "$NOTES" ]; then NOTES="  - Nothing stands out right now. Run it again while an agent is working hard."$'\n'; fi
 }
@@ -267,14 +333,16 @@ snapshot() {
   stand_out
 
   if (( JSON )); then
-    printf '{"version":"%s","cores":%s,"memory_gb":%s,"load_1m":%s,"swap_used":"%s","agents":%s,"agent_sessions":%s,"agent_cpu_percent_of_machine":%s,"agent_memory_mb":%s,"agent_builds":%s,"other_builds":%s,"possible_leftovers":%s,"idle_helpers":%s,"idle_helper_mb":%s,"repeated_helpers":%s,"ports_held":%s,"energy_mode":"%s"}\n' \
-      "$VERSION" "$CPUS" "$MEM_GB" "${LOAD:-null}" "${SWAP:-?}" "$A_N" "$SESS_N" "$AG_PCT" "$AG_MB" "$B_AGENT" "$B_OWN" "$LEFT_N" "$IDLE_N" "$IDLE_MB" "$DUP_N" "$PORT_N" "$ENERGY"
+    local sj; sj=$(echo "$SCAN" | awk -F'\t' '$1 == "SESS" { printf "%s{\"label\":\"%s\",\"processes\":%d,\"cpu_percent\":%s,\"memory_mb\":%d,\"cpu_minutes\":%d,\"idle_helpers\":%d,\"builds\":%d,\"looks_forgotten\":%s}", (n++ ? "," : ""), $2, $5, $6, $7, $8, $9, $11, ($12 == 1 ? "true" : "false") }')
+    printf '{"version":"%s","macos":"%s","cores":%s,"memory_gb":%s,"load_1m":%s,"swap_used":"%s","agents":%s,"agent_sessions":%s,"agent_cpu_percent_of_machine":%s,"agent_memory_mb":%s,"agent_builds":%s,"other_builds":%s,"possible_leftovers":%s,"idle_helpers":%s,"idle_helper_mb":%s,"repeated_helpers":%s,"ports_held":%s,"possible_runaways":%s,"suspended_or_zombie":%s,"forgotten_sessions":%s,"sleep_locks_by_agents":%s,"shared_folders":%s,"disk_free_gb":%s,"energy_mode":"%s","sessions":[%s]}\n' \
+      "$VERSION" "$OSINFO" "$CPUS" "$MEM_GB" "${LOAD:-null}" "${SWAP:-?}" "$A_N" "$SESS_N" "$AG_PCT" "$AG_MB" "$B_AGENT" "$B_OWN" "$LEFT_N" "$IDLE_N" "$IDLE_MB" "$DUP_N" "$PORT_N" "$RUN_N" "$STUCK_N" "$FORGOT_N" "$AWAKE_N" "$SHARED_N" "${DISK:-null}" "$ENERGY" "$sj"
     return
   fi
 
   echo "Yare doctor v$VERSION (read-only snapshot, nothing was changed)"
-  echo "Mac: $CPUS cores, ${MEM_GB} GB memory. Load average (1 min): ${LOAD:-?}. Swap used: ${SWAP:-?}.${FREE:+ Memory free: ${FREE}%.}"
-  echo "Energy mode: $ENERGY. CPU speed limit recorded by macOS: ${THERM:-none}${THERM:+%}."
+  echo "$OSINFO: $CPUS cores, ${MEM_GB} GB memory. Load average (1 min): ${LOAD:-?}. Swap used: ${SWAP:-?}.${FREE:+ Memory free: ${FREE}%.}"
+  echo "Power: $( [ "${PSRC:-}" = battery ] && echo "on battery${BATT:+ ${BATT}%}" || echo "plugged in" ). Energy mode: $ENERGY. CPU speed limit recorded by macOS: ${THERM:-none}${THERM:+%}. Disk free: ${DISK:-?} GB."
+  echo "Open files: ${F_OPEN:-?} of ${F_MAX:-?}. Processes: ${P_NOW:-?} of ${P_MAX:-?}."
   echo
   echo "WHAT STANDS OUT"
   printf '%s' "$NOTES"
@@ -283,13 +351,18 @@ snapshot() {
   if (( SESS_N == 0 )); then
     echo "  No coding agent found running."
   else
-    printf '  %-12s %-8s %6s %7s %9s %9s  %s\n' "SESSION" "RUNNING" "PROCS" "CPU" "MEMORY" "CPU USED" "IDLE HELPERS"
-    echo "$SCAN" | awk -F'\t' '$1 == "SESS" {
+    printf '  %-11s %-16s %-8s %5s %7s %9s %9s %6s  %s\n' "SESSION" "FOLDER" "RUNNING" "PROCS" "CPU" "MEMORY" "CPU USED" "BUILDS" "NOTES"
+    awk -F'\t' 'NR == FNR { n = split($2, a, "/"); fold[$1] = a[n]; next }
+      $1 == "SESS" {
       mem = ($7 >= 1024) ? sprintf("%.1f GB", $7 / 1024) : sprintf("%d MB", $7)
       cu = ($8 >= 120) ? sprintf("%.1f h", $8 / 60) : sprintf("%d min", $8)
-      idle = ($9 > 0) ? sprintf("%d (%d MB)", $9, $10) : "-"
-      printf "  %-12s %-8s %6d %6.1f%% %9s %9s  %s\n", $2, $4, $5, $6, mem, cu, idle }'
-    echo "  CPU USED counts only processes still alive. IDLE HELPERS: alive over 30 min and barely any CPU used."
+      fl = ""
+      if ($9 > 0) fl = sprintf("%d idle helper(s), %d MB", $9, $10)
+      if ($12 == 1) fl = fl (fl == "" ? "" : "; ") "looks forgotten"
+      if ($13 > 0) fl = fl (fl == "" ? "" : "; ") sprintf("%d suspended", $13)
+      if (fl == "") fl = "-"
+      printf "  %-11s %-16s %-8s %5d %6.1f%% %9s %9s %6d  %s\n", $2, substr(($3 in fold) ? fold[$3] : "-", 1, 16), $4, $5, $6, mem, cu, $11, fl }' <(printf '%s\n' "$FOLDERS") <(echo "$SCAN")
+    echo "  CPU USED counts only processes still alive. Idle helper: alive over 30 min and barely any CPU used. FOLDER is the agent's working folder."
   fi
   echo
   echo "WHO IS USING THE CPU RIGHT NOW (ps average; the owner is the agent session that started it)"
@@ -301,6 +374,18 @@ snapshot() {
     echo "  Nothing above 1% CPU."
   fi
   echo
+  local mt; mt=$(echo "$SCAN" | awk -F'\t' '$1 == "MEM"' | sort -t"$TAB" -k4 -nr | head -5)
+  if [ -n "$mt" ]; then
+    echo "WHO IS HOLDING THE MOST MEMORY (300 MB or more each)"
+    echo "$mt" | awk -F'\t' '{ printf "  %-34s %6d MB  %s\n", $5, $4, ($3 == "-" ? "not an agent" : "started by " $3) }'
+    echo
+  fi
+  if (( RUN_N + STUCK_N > 0 )); then
+    echo "NEEDS A LOOK (inside agent sessions)"
+    echo "$SCAN" | awk -F'\t' '$1 == "RUN" { printf "  %-28s %5.1f%% CPU for a process running %s: may be stuck in a loop (started by %s, pid %s)\n", $6, $4, $5, $3, $2 }
+      $1 == "STUCK" { printf "  %-28s %s, started by %s (pid %s): %s\n", $5, ($4 == "Z" ? "zombie" : "suspended"), $3, $2, ($4 == "Z" ? "already finished, waiting for its parent" : "still holds its memory") }'
+    echo
+  fi
   echo "Builds and tests running: $((B_AGENT + B_OWN))"
   echo "   started by an agent:                  $B_AGENT  (about ${B_AGENT_CPU}% CPU)"
   echo "   not under any agent (likely yours):   $B_OWN  (about ${B_OWN_CPU}% CPU)"
@@ -315,6 +400,11 @@ snapshot() {
     echo "$PORTS" | awk -F'\t' '{ printf "   :%-6s %-12s %s\n", $2, $1, ($3 == "leftover" ? "no parent, looks left over" : "started by " $3) }'
     echo
   fi
+  if [ -n "$AWAKE" ]; then
+    echo "WHAT IS KEEPING THIS MAC AWAKE (apart from macOS itself)"
+    echo "$AWAKE" | awk -F'\t' 'NF { printf "   %-20s keeps the %-6s awake, for %-9s %s\n", $1, $2, $3, ($4 == "-" ? "not an agent" : "started by " $4) }'
+    echo
+  fi
   if (( LEFT_N > 0 )); then
     echo "Possible leftovers: $LEFT_N helper process(es) with no parent, alive over 30 minutes."
     echo "These may be from agent sessions that ended. Check before closing any of them."
@@ -326,8 +416,8 @@ snapshot() {
   fi
   echo
   echo "How to read this: run it while an agent works and again when they are idle. Try --watch 60 to see how often"
-  echo "an agent's build collided with yours. This is a rough snapshot, not a benchmark; the leftover and idle checks are"
-  echo "heuristics that can be wrong, and ps CPU is an average, not an instant reading."
+  echo "an agent's build collided with yours. This is a rough snapshot, not a benchmark; the leftover, idle and runaway checks"
+  echo "are heuristics that can be wrong, and ps CPU is an average, not an instant reading."
   if (( SHARE )); then
     echo
     echo "Paste-able summary (counts only, no paths, user names or commands):"
@@ -340,7 +430,7 @@ snapshot() {
 watch_mode() {
   local samples=$(( WATCH_SECS / INTERVAL )) i
   local peak_agents=0 peak_ab=0 peak_ob=0 peak_load=0 peak_sess=0 overlap=0 agent_build_samples=0 own_build_samples=0
-  local squeezed=0 busy=0 rows="" srows=""
+  local squeezed=0 busy=0 rows="" srows="" first_mem="" last_mem=0
   local swap_start; swap_start=$(swap_used)
   if (( ! JSON )); then
     echo "Yare doctor v$VERSION, watching for ${WATCH_SECS}s (a sample every ${INTERVAL}s, read-only). Use your Mac and your agents as you normally do."
@@ -367,7 +457,8 @@ watch_mode() {
       if awk -v a="$allc" -v g="$agc" 'BEGIN { exit !(g >= a / 3) }'; then squeezed=$((squeezed + 1)); fi
     fi
     rows="${rows}${allc} ${agc}"$'\n'
-    srows="${srows}$(echo "$SCAN" | awk -F'\t' '$1 == "SESS" { print $3, $2, $6 }')"$'\n'
+    srows="${srows}$(echo "$SCAN" | awk -F'\t' '$1 == "SESS" { print $3, $2, $6, $7 }')"$'\n'
+    last_mem=$(total TOT "" 5); [ -z "$first_mem" ] && first_mem=$last_mem
     (( i < samples )) && sleep "$INTERVAL"
   done
   gather
@@ -377,16 +468,18 @@ watch_mode() {
   local mins; mins=$(echo "$rows" | awk -v iv="$INTERVAL" 'NF { all += $1; ag += $2 } END { printf "%.1f %.1f", ag / 100 * iv / 60, (all - ag) / 100 * iv / 60 }')
   local ag_min=${mins% *} oth_min=${mins#* }
   local busiest; busiest=$(echo "$srows" | awk 'NF { s[$1] += $3; n[$1] = $2 } END { for (p in s) if (s[p] > m) { m = s[p]; b = n[p] " (pid " p ")" } print b }')
+  local grow; grow=$(echo "$srows" | awk 'NF { if (!($1 in f)) { f[$1] = $4; nm[$1] = $2 } l[$1] = $4 } END { for (p in l) { d = l[p] - f[p]; if (d > m) { m = d; b = nm[p] " (pid " p ")" } } if (m >= 50) printf "%s grew by %d MB", b, m }')
   LOAD=$peak_load; SWAP=$swap_end; B_AGENT=$peak_ab; B_OWN=$peak_ob
   if (( JSON )); then
-    printf '{"version":"%s","watch_seconds":%s,"peak_agents":%s,"peak_sessions":%s,"peak_agent_builds":%s,"peak_other_builds":%s,"seconds_agent_builds_overlapped_other_builds":%s,"seconds_with_agent_builds":%s,"seconds_with_other_builds":%s,"seconds_machine_busy":%s,"seconds_squeezed_by_agents":%s,"agent_cpu_minutes":%s,"other_cpu_minutes":%s,"peak_load_1m":%s,"swap_used_start":"%s","swap_used_end":"%s"}\n' \
-      "$VERSION" "$WATCH_SECS" "$peak_agents" "$peak_sess" "$peak_ab" "$peak_ob" "$ov_s" "$ab_s" "$ob_s" "$busy_s" "$sq_s" "$ag_min" "$oth_min" "${peak_load:-0}" "${swap_start:-?}" "${swap_end:-?}"
+    printf '{"version":"%s","watch_seconds":%s,"peak_agents":%s,"peak_sessions":%s,"peak_agent_builds":%s,"peak_other_builds":%s,"seconds_agent_builds_overlapped_other_builds":%s,"seconds_with_agent_builds":%s,"seconds_with_other_builds":%s,"seconds_machine_busy":%s,"seconds_squeezed_by_agents":%s,"agent_cpu_minutes":%s,"other_cpu_minutes":%s,"agent_memory_mb_start":%s,"agent_memory_mb_end":%s,"peak_load_1m":%s,"swap_used_start":"%s","swap_used_end":"%s"}\n' \
+      "$VERSION" "$WATCH_SECS" "$peak_agents" "$peak_sess" "$peak_ab" "$peak_ob" "$ov_s" "$ab_s" "$ob_s" "$busy_s" "$sq_s" "$ag_min" "$oth_min" "${first_mem:-0}" "${last_mem:-0}" "${peak_load:-0}" "${swap_start:-?}" "${swap_end:-?}"
     return
   fi
   echo
   echo "Over ${WATCH_SECS}s, at most at once: $peak_agents agent processes in $peak_sess sessions, $peak_ab agent builds, $peak_ob builds not under an agent. Peak load $peak_load. Swap ${swap_start:-?} -> ${swap_end:-?}."
   echo "CPU used in the window: agents and what they started about $ag_min CPU-minutes, everything else about $oth_min."
   if [ -n "$busiest" ]; then echo "Busiest agent session: $busiest."; fi
+  echo "Memory held by agent sessions: ${first_mem:-0} MB at the start, ${last_mem:-0} MB at the end.${grow:+ Biggest growth: $grow.}"
   echo "The Mac was at 80% CPU or more for ~${busy_s}s; for ~${sq_s}s of that, agents were at least a third of the load."
   echo "An agent's build was running for ~${ab_s}s and a build of yours for ~${ob_s}s; they overlapped for ~${ov_s}s."
   if (( ov_s == 0 && sq_s == 0 )); then
@@ -403,4 +496,58 @@ watch_mode() {
   echo "We would like to hear what it found. Yare is an early prototype Mac tool, not released yet. Updates: $LINK"
 }
 
-if [ "$MODE" = watch ]; then watch_mode; else snapshot; fi
+selftest() {
+  local pass=0 fail=0 out
+  chk() { if [ "$2" = "$3" ]; then printf '  PASS  %s\n' "$1"; pass=$((pass + 1)); else printf '  FAIL  %s (expected %s, got %s)\n' "$1" "$3" "${2:-nothing}"; fail=$((fail + 1)); fi; }
+  echo "Yare doctor v$VERSION self-test (read-only): does every part work on this Mac?"
+  echo "bash $BASH_VERSION, $(macos_info)"
+  echo
+  local t
+  for t in ps sysctl pmset lsof df sw_vers memory_pressure awk sort sed; do
+    if command -v "$t" >/dev/null 2>&1; then chk "tool present: $t" ok ok; else chk "tool present: $t" missing ok; fi
+  done
+  # 1) the parser on a made-up process list with known answers
+  procs() { cat <<'EOF'
+100 1 S 1.0 100000 02:00:00 00:10.00 /usr/local/bin/claude --resume
+101 100 S 0.0 50000 01:30:00 00:00.10 node /x/mcp-server.js
+102 100 S 0.0 50000 01:30:00 00:00.10 node /y/mcp-server.js
+103 100 S 0.0 50000 01:30:00 00:00.10 node /z/mcp-server.js
+104 100 S 5.0 20000 01:00 00:02.00 /usr/bin/clang -c a.c
+105 104 T 0.0 1000 20:00 00:00.00 worker
+106 100 R 90.0 80000 20:00 00:12.00 python3 loop.py
+300 1 S 0.0 40000 01:00:00 00:00.10 node /w/mcp-leftover.js
+EOF
+  }
+  SCAN=$(scan)
+  echo
+  echo "Parser on a made-up process list:"
+  chk "one agent session found" "$(count SESS)" 1
+  chk "session has 7 processes" "$(total SESS "" 5)" 7
+  chk "agent build found under the agent" "$(total BUILD agent 3)" 1
+  chk "same helper 3 times found" "$(echo "$SCAN" | awk -F'\t' '$1 == "DUP" { print $3 }')" 3
+  chk "leftover found" "$(count LEFT)" 1
+  chk "suspended process found" "$(count STUCK)" 1
+  chk "runaway process found" "$(count RUN)" 1
+  procs() { real_procs; }
+  # 2) the real Mac
+  echo
+  echo "On this Mac:"
+  SCAN=$(scan)
+  chk "process list read (more than 20 processes)" "$([ "$(total TOT "" 6)" -gt 20 ] 2>/dev/null && echo ok || echo no)" ok
+  chk "load average readable" "$([ -n "$(load1)" ] && echo ok || echo no)" ok
+  chk "swap readable" "$([ -n "$(swap_used)" ] && echo ok || echo no)" ok
+  chk "memory pressure readable" "$([ -n "$(mem_free_pct)" ] && echo ok || echo no)" ok
+  chk "disk space readable" "$([ -n "$(disk_free_gb)" ] && echo ok || echo no)" ok
+  chk "power settings readable" "$([ -n "$(energy_mode)" ] && echo ok || echo no)" ok
+  chk "open-port listing works" "$(lsof -nP -iTCP -sTCP:LISTEN >/dev/null 2>&1; echo $?)" 0
+  chk "sleep-lock listing works" "$(pmset -g assertions >/dev/null 2>&1; echo $?)" 0
+  echo
+  if (( fail == 0 )); then
+    echo "All $pass checks passed."
+  else
+    echo "$fail of $((pass + fail)) checks failed. Please send this line when you report it (it has no personal data):"
+    echo "yare-doctor $VERSION, bash $BASH_VERSION, $(macos_info), $fail failed"
+  fi
+}
+
+case $MODE in watch) watch_mode ;; selftest) selftest ;; *) snapshot ;; esac
