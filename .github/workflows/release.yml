@@ -1,0 +1,54 @@
+name: release
+# Push a tag like v0.1.1 (the same number as VERSION in yare-doctor.sh and a heading in CHANGELOG.md).
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: the tag, the script and the changelog must agree
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ver=$(/bin/bash yare-doctor.sh --version | awk '{print $2}')
+          [ "$tag" = "$ver" ] || { echo "tag $tag but the script says $ver"; exit 1; }
+          grep -q "^## $tag " CHANGELOG.md || { echo "CHANGELOG.md has no section for $tag"; exit 1; }
+      - name: self-test with the bash that ships with macOS
+        run: /bin/bash yare-doctor.sh --selftest --no-color
+      - name: build the release
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          sha=$(shasum -a 256 yare-doctor.sh | cut -d' ' -f1)
+          echo "$sha  yare-doctor.sh" > yare-doctor.sh.sha256
+          awk -v t="$tag" '$0 ~ "^## " t " " {on=1; next} /^## / {on=0} on' CHANGELOG.md > notes.md
+          {
+            echo
+            echo "sha256 of yare-doctor.sh: \`$sha\` (check with: \`bash yare-doctor.sh --checksum\`)"
+            echo
+            echo "Install: \`brew install yare-org/tap/yare-doctor\`, or download \`yare-doctor.sh\` below and run it with \`bash\`."
+          } >> notes.md
+          echo "SHA=$sha" >> "$GITHUB_ENV"
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" yare-doctor.sh yare-doctor.sh.sha256 \
+            --title "yare-doctor ${GITHUB_REF_NAME}" --notes-file notes.md
+      - name: update the Homebrew tap (only when a TAP_TOKEN secret is set)
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+        run: |
+          [ -n "$TAP_TOKEN" ] || { echo "no TAP_TOKEN secret: update Yare-Org/homebrew-tap by hand"; exit 0; }
+          tag="${GITHUB_REF_NAME#v}"
+          git clone -q "https://x-access-token:${TAP_TOKEN}@github.com/Yare-Org/homebrew-tap.git" tap
+          cd tap
+          f=Formula/yare-doctor.rb
+          sed -i '' -E \
+            -e "s#^  url \".*\"#  url \"https://github.com/Yare-Org/yare-doctor/releases/download/${GITHUB_REF_NAME}/yare-doctor.sh\"#" \
+            -e "s#^  sha256 \".*\"#  sha256 \"${SHA}\"#" \
+            -e "s#yare-doctor [0-9][0-9.]*\"#yare-doctor ${tag}\"#" "$f"
+          git config user.name "yare-doctor release"; git config user.email "noreply@github.com"
+          git add "$f"; git commit -q -m "yare-doctor ${tag}"; git push -q

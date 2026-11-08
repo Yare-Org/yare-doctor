@@ -1,0 +1,28 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck -S warning yare-doctor.sh
+  selftest:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, macos-15, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash 3.2 (the one that ships with macOS)
+        run: /bin/bash yare-doctor.sh --selftest --no-color
+      - name: a run on an idle runner must not crash
+        run: |
+          /bin/bash yare-doctor.sh --no-color > /dev/null
+          /bin/bash yare-doctor.sh --json | python3 -c 'import json,sys; json.load(sys.stdin)'
+          /bin/bash yare-doctor.sh --check || test $? -le 2

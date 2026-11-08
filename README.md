@@ -2,36 +2,46 @@
 
 A small, read-only script that shows what your coding agents are doing to your Mac. It follows every process back to the agent session that started it, so it can tell you which agent is holding what.
 
-**Install** (optional; or just download the one file and run it with `bash`):
+**Install** (any one of these; the script is one file, and you should read it first):
 
 ```sh
-brew install yare-org/tap/yare-doctor
+brew install yare-org/tap/yare-doctor      # Homebrew
 yare-doctor --watch 60
 ```
 
 ```sh
-bash yare-doctor.sh                 # one snapshot, run it while your agents are working (about a quarter of a second)
-bash yare-doctor.sh --watch 60      # sample for a minute: how often did an agent's build overlap yours?
-bash yare-doctor.sh --share         # also prints one line of counts you can paste in a reply
-bash yare-doctor.sh --json          # counts and per-session numbers as JSON
-bash yare-doctor.sh --selftest      # does every part work on this Mac?
-bash yare-doctor.sh --live          # refreshing view of sessions and CPU (Ctrl-C to quit)
-bash yare-doctor.sh --why 1234      # who started process 1234? prints its chain up to the agent session
-bash yare-doctor.sh --redact        # hide folder, helper and leftover-command names so the whole report is safe to paste
-bash yare-doctor.sh --checksum      # sha256 of this file, to compare with the release notes
-bash yare-doctor.sh --oneline       # one short line for a tmux or prompt status bar
-bash yare-doctor.sh --check         # quiet; exit code 0 nothing to do, 1 worth a look, 2 act on it (for scripts and cron)
-bash yare-doctor.sh --no-color      # plain text (automatic when piped or when NO_COLOR is set)
+# or without Homebrew: download the release file, check it, run it
+curl -fsSLO https://github.com/Yare-Org/yare-doctor/releases/latest/download/yare-doctor.sh
+curl -fsSLO https://github.com/Yare-Org/yare-doctor/releases/latest/download/yare-doctor.sh.sha256
+shasum -a 256 -c yare-doctor.sh.sha256     # must print: yare-doctor.sh: OK
+bash yare-doctor.sh
 ```
 
-It is about 900 lines of bash. **Read it before you run it**; that is what it is for.
+```sh
+bash yare-doctor.sh                 # one snapshot, run it while your agents are working (about a second)
+bash yare-doctor.sh --watch 60      # sample for a minute: how often did an agent's build overlap yours?
+bash yare-doctor.sh --live          # refreshing view of sessions and CPU (q quits)
+bash yare-doctor.sh --tree          # every process each session started, as a tree
+bash yare-doctor.sh --why 1234      # who started process 1234? its chain up to the agent session
+bash yare-doctor.sh --cleanup       # what could be closed, with kill commands (printed, never run)
+bash yare-doctor.sh --card          # a small boxed summary with a health score, for screenshots
+bash yare-doctor.sh --share         # also prints one line of counts you can paste in a reply
+bash yare-doctor.sh --redact        # hide folder, branch and helper names so the whole report is safe to paste
+bash yare-doctor.sh --json          # machine-readable output (--prom for Prometheus)
+bash yare-doctor.sh --check         # quiet; exit 0 nothing to do, 1 worth a look, 2 act on it (cron, scripts)
+bash yare-doctor.sh --rules         # every rule and threshold it uses, including what counts as an agent
+bash yare-doctor.sh --selftest      # does every part work on this Mac?
+bash yare-doctor.sh --help          # all options
+```
+
+It is about 2,000 lines of bash. **Read it before you run it**; that is what it is for. Every release has a checksum (`bash yare-doctor.sh --checksum`) you can compare with the release notes. Changes are in [CHANGELOG.md](CHANGELOG.md).
 
 ## What it looks like
 
 Colour and bars in a terminal; plain text when piped or with `--no-color`. This is the top of a real report on a Mac with four agent sessions, run with `--redact` (folder names hidden):
 
 ```text
-yare-doctor  0.6.0 · read-only · nothing was changed
+yare-doctor  0.1.0 · read-only · nothing was changed
 ──────────────────────────────────────────────────────────────────────────────────────────────────
 
   Mac       Apple M3 Max · 14 cores · 36 GB · macOS 27.2 · up 7 days
@@ -79,7 +89,7 @@ Processes that no longer have a parent (a dev server an agent left running, or a
 ## What it reports
 
 - **What stands out**: a few plain sentences at the top, only about things it actually found.
-- **Agent sessions**: each Claude Code, Codex, OpenCode, Aider, Cursor agent or Gemini session and *everything it started*, with the folder it works in, the app it runs in (Terminal, iTerm, VS Code, T3 Code, tmux, ...), how many files it holds open, how long it has been running, when it last started a process (ACTIVE), process count, CPU, memory, CPU time used so far, and builds. Activity Monitor lists processes; this groups them by which agent started them.
+- **Agent sessions**: each session of the 22 coding agents it recognises (Claude Code, Codex, Gemini, OpenCode, Cursor, Copilot, Amp, Aider, Goose, Kilo and more; `--rules` lists them all) and *everything it started*, with the folder it works in, the app it runs in (Terminal, iTerm, VS Code, T3 Code, tmux, ...), how many files it holds open, how long it has been running, when it last started a process (ACTIVE), process count, CPU, memory, CPU time used so far, and builds. Activity Monitor lists processes; this groups them by which agent started them.
 - **Who is using the CPU and memory right now, and who started it.** If your Mac feels slow, this shows whether it is an agent's tree or something else (often it is not the agent).
 - **Idle helpers**: helper processes inside a session that have been alive over 30 minutes and barely used any CPU, with the memory they hold. (An MCP server waiting for requests looks like this too, so it is a pointer, not a verdict.)
 - **Helpers started many times**: the same helper (for example one MCP server per session) running 3 or more times, and how much memory that adds up to.
@@ -109,8 +119,8 @@ Processes that no longer have a parent (a dev server an agent left running, or a
 ## Limits, stated plainly
 
 - It is a rough snapshot, not a benchmark. Overlap shows how often builds collided, not how much it slowed you down.
-- Detection is by process name and ancestry, so it can miss an agent or misflag a process. The leftover and idle checks are heuristics. `ps` reports an average CPU figure, not an instant one, and macOS does not always record thermal limits, so "none" does not prove the Mac is not throttled.
-- Built for macOS and tested on a small number of Macs so far (bash 3.2 as shipped with macOS). If it gets something wrong on yours, please open an issue with the process name.
+- Detection is by process name, script name and ancestry, so it can miss an agent or misflag a process. 16 of the 22 agents were launched for real on one Apple Silicon Mac and their actual process lists are in `--selftest`; the other six (kiro-cli, cline, plandex, openhands, devin, hermes) are covered by their published command lines only. The leftover and idle checks are heuristics. `ps` reports an average CPU figure, not an instant one, and macOS does not always record thermal limits, so "none" does not prove the Mac is not throttled.
+- Built for macOS and tested on a small number of Macs so far (bash 3.2 as shipped with macOS; CI runs `--selftest` on macOS 14 and 15). If it gets something wrong on yours, run `bash yare-doctor.sh --capture > capture.txt` (a process list with arguments trimmed) and attach it to an issue; `--from capture.txt` replays it here.
 
 ## About
 
