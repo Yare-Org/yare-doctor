@@ -18,8 +18,9 @@ bash yare-doctor.sh
 ```
 
 ```sh
-yare-doctor                  # the whole picture now: each agent session, what it started, CPU and memory, builds, findings
+yare-doctor                  # opens the tabbed screen: Overview, Sessions, Processes, Activity, Findings, Tree, Agents, Help
 yare-doctor watch 60         # sample for a minute while an agent builds: did its build overlap yours?
+yare-doctor plain            # the same picture as one plain report (this is also what you get when output is piped)
 yare-doctor tree             # every process each session started, as a tree
 yare-doctor why 1234         # who started process 1234, and which agent session it belongs to
 yare-doctor cleanup          # what could be closed, with the kill commands (printed, never run)
@@ -27,7 +28,7 @@ yare-doctor share            # adds one line of counts (no paths or names) to pa
 yare-doctor help             # the short list; "yare-doctor help all" shows every option (json, html, check, snippet, installed ...)
 ```
 
-Without Homebrew, replace `yare-doctor` with `bash yare-doctor.sh`. Every word is also an option (`--watch`, `--tree`, ...), so older commands keep working.
+In the tabbed screen: click a tab name or use Left/Right (or Tab), 1 to 8 to jump, Up/Down or the mouse wheel to scroll, `r` to refresh, `a` for auto-refresh, `q` to quit. Clicking needs a terminal with mouse support (iTerm2, Ghostty, Warp, VS Code, recent Terminal); the keys work everywhere. Without Homebrew, replace `yare-doctor` with `bash yare-doctor.sh`. Every word is also an option (`--watch`, `--tree`, ...), so older commands keep working.
 
 If it shows a coding agent it does not know, or misses one, run `YARE_DOCTOR_AGENTS=name yare-doctor` to include it by program name, and send the output of `yare-doctor capture` in an issue.
 

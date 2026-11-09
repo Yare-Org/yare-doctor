@@ -25,6 +25,8 @@ jobs:
         run: |
           python3 tests/matrix.py yare-doctor.sh
           python3 tests/forest.py 1 60 yare-doctor.sh
+      - name: the tabbed screen in a real pseudo-terminal
+        run: python3 tests/tabs_pty.py yare-doctor.sh
       - name: a run on an idle runner must not crash
         run: |
           /bin/bash yare-doctor.sh --no-color > /dev/null
