@@ -20,12 +20,13 @@ First public release.
 - A health score and grade. CPU is measured over a second, not read from `ps`.
 
 **Views and outputs**
+- Tables: every column header is aligned over its column with two-space gaps (sessions, host apps, CPU, memory, watch); the folder and process-name columns use the spare terminal width; a self-test checks that the sessions table lines up at 80, 100 and 110 columns.
 - One command does most of it: plain `yare-doctor` shows sessions, what each started, CPU and memory, builds, findings and which agents are installed. Plain words work like options (`yare-doctor watch 60`, `tree`, `why 1234`, `cleanup`, `share`, `json`); `help` is short and `help all` lists every option.
 - `--sessions`, `--tree`, `--why PID`, `--installed`, `--cleanup` (prints kill commands, never runs them), `--card`, `--awards`, `--zoo`, `--vibe`, `--slow`, `--compare`, `--rules`, `--live`, `--watch`.
 - `--json`, `--prom`, `--md`, `--html`, `--ascii`, `--light`, `--share`, `--redact`, `--oneline`, `--check` with budget limits and `--notify`, `--snippet launchd|cron|tmux|zsh|statusline`, `--completions bash|zsh`.
 
 **Trust**
-- `--selftest` (236 checks), `--checksum`, `--capture` (masks private words) and `--from FILE` to replay a process list on another machine. `tests/` has a generated test of about 1,300 command lines, a random process-tree test, a live end-to-end test and a recorder for real launches. CI runs them on macOS 15 (Apple silicon and Intel).
+- `--selftest` (239 checks), `--checksum`, `--capture` (masks private words) and `--from FILE` to replay a process list on another machine. `tests/` has a generated test of about 1,300 command lines, a random process-tree test, a live end-to-end test and a recorder for real launches. CI runs them on macOS 15 (Apple silicon and Intel).
 - Tested on one Mac so far. If it misses an agent on yours, send `bash yare-doctor.sh --capture` output in an issue.
 
 Read-only: no network, no files written, nothing stopped (the optional `--notify` shows a macOS notification). One bash script that works with the bash that ships with macOS (3.2).

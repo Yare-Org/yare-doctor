@@ -340,8 +340,8 @@ scan() {
   }
   function appname(cmd,   i, s, t) {
     i = index(cmd, ".app/Contents/MacOS/")
-    if (i) { s = substr(cmd, i + 20); sub(/ -.*/, "", s); return substr(s, 1, 34) }
-    split(cmd, t, " "); return substr(base(t[1]), 1, 34)
+    if (i) { s = substr(cmd, i + 20); sub(/ -.*/, "", s); return substr(s, 1, 44) }
+    split(cmd, t, " "); return substr(base(t[1]), 1, 44)
   }
   # the program a process is: the bundle name for the main binary of an app, otherwise the file name
   function exelabel(cmd,   i, s, t) {
@@ -892,6 +892,7 @@ function ucut(s, k,   i, n, b, e) { # the first k characters of s
   return substr(s, 1, e)
 }
 function fit(s, w) { if (ulen(s) <= w) return s; return ucut(s, w - 1) ELL }
+function rp(s, w,   t, n) { t = fit(s, w); n = w - ulen(t); return (n > 0 ? sprintf("%" n "s", "") : "") t }
 function pad(s, w,   t, n) { t = fit(s, w); n = w - ulen(t); return t (n > 0 ? sprintf("%" n "s", "") : "") }
 function c256(n, fb) { if (!ON) return ""; return P256 ? sprintf("%c[38;5;%dm", 27, n) : sprintf("%c[%dm", 27, fb) }
 function gcol(f,   a, n, k) {
@@ -1038,11 +1039,14 @@ sessions_table() {
     $1 == "MCPS" { mcp[$2] = sprintf("%d MCP %s (%s)", $3, ($3 == 1 ? "server" : "servers"), mb($4)); next }
     $1 == "NOW" { now[$2] = $6 " " sprintf("%.0f%%", $4) " for " $5; next }
     $1 == "SESS" {
-      if (!hdr++) printf "  %s  %-10s %-14s %-10s %8s %8s %5s %7s %9s %6s %6s%s\n", DIM, "SESSION", "FOLDER", "HOST", "RUNNING", "ACTIVE", "PROCS", "CPU", "MEMORY", "FILES", "BUILDS", RST
+      if (!hdr++) {
+        G = (W >= 98 ? "  " : " "); FW = W - 68 - 9 * length(G); if (FW < 10) FW = 10; if (FW > 26) FW = 26
+        print "  " DIM "  " pad("SESSION", 10) G pad("FOLDER", FW) G pad("HOST", 10) G rp("RUNNING", 7) G rp("ACTIVE", 7) G rp("PROCS", 5) G rp("CPU", 6) G rp("MEMORY", 8) G rp("FILES", 5) G rp("BUILDS", 6) RST
+      }
       files = ($2 in fc) ? fc[$2] : "-"
       sc = scol($2)
       dc = ($12 == 1) ? RED : ($16 >= 0 && $16 < 30) ? GRN : ($16 >= 0 && $16 < 600) ? CYA : ($16 >= 0 && $16 < 7200) ? DIM : ($16 >= 0) ? YEL : DIM
-      printf "  %s%s%s %s%s%s%s %s%s%s %s%s%s %8s %s%8s%s %5d %s%7s%s %s%9s%s %s%6s%s %s%6d%s\n", dc, DOT, RST, sc, BLD, pad($2, 10), RST, BLU, pad(($3 in fold) ? fold[$3] : "-", 14), RST, scol($15), pad($15, 10), RST, $4, dc, $18, RST, $5, heat($6, 50, 100), sprintf("%.1f%%", $6), RST, heat($7, 1500, 4000), mb($7), RST, heat(files, 2000, 8000), files, RST, ($11 > 0 ? YEL : DIM), $11, RST
+      print "  " dc DOT RST " " sc BLD pad($2, 10) RST G BLU pad(($3 in fold) ? fold[$3] : "-", FW) RST G scol($15) pad($15, 10) RST G rp($4, 7) G dc rp($18, 7) RST G rp($5, 5) G heat($6, 50, 100) rp(sprintf("%.1f%%", $6), 6) RST G heat($7, 1500, 4000) rp(mb($7), 8) RST G heat(files, 2000, 8000) rp(files, 5) RST G ($11 > 0 ? YEL : DIM) rp($11, 6) RST
       s = ""
       if ($3 in ver) s = s GRY "v" ver[$3] RST "  "
       if ($3 in br) s = s CYA "on " br[$3] RST "  "
@@ -1064,8 +1068,11 @@ apps_table() {
   [ -z "$ap" ] && return
   section "HOST APPS" "the app each session runs in, counting all its windows and helper processes"
   echo "$ap" | uawk -F'\t' "$AWKLIB"'{ nm[NR] = $2; cpu[NR] = $4; mem[NR] = $5; np[NR] = $6; ns[NR] = $7; sc[NR] = $8; if ($4 > mx) mx = $4 }
-    END { printf "  %s  %-26s  %-8s %7s %9s %6s %9s  %s%s\n", DIM, "APP", "", "CPU", "MEMORY", "PROCS", "SESSIONS", "OF WHICH THE AGENTS", RST
-      for (i = 1; i <= NR; i++) printf "  %s%s%s %s%s%s  %s%s%s %s%7s%s %s%9s%s %6d %s%9d%s  %s%.1f%%%s\n", scol(nm[i]), DOT, RST, scol(nm[i]) BLD, pad(nm[i], 26), RST, heat(cpu[i], 100, 250), bar(cpu[i] / (mx > 0 ? mx : 1), 8), RST, heat(cpu[i], 100, 250), sprintf("%.1f%%", cpu[i]), RST, heat(mem[i], 2000, 6000), mb(mem[i]), RST, np[i], MAG, ns[i], RST, CYA, sc[i], RST }'
+    END {
+      NW = (W >= 104 ? 36 : 26)
+      print "  " DIM "  " pad("APP", NW) "  " pad("", 8) " " rp("CPU", 7) " " rp("MEMORY", 9) "  " rp("PROCS", 5) "  " rp("SESSIONS", 8) "  " rp("AGENTS", 7) RST
+      for (i = 1; i <= NR; i++) print "  " scol(nm[i]) DOT RST " " scol(nm[i]) BLD pad(nm[i], NW) RST "  " heat(cpu[i], 100, 250) bar(cpu[i] / (mx > 0 ? mx : 1), 8) RST " " heat(cpu[i], 100, 250) rp(sprintf("%.1f%%", cpu[i]), 7) RST " " heat(mem[i], 2000, 6000) rp(mb(mem[i]), 9) RST "  " rp(np[i], 5) "  " MAG rp(ns[i], 8) RST "  " CYA rp(sprintf("%.1f%%", sc[i]), 7) RST
+    }'
 }
 
 cpu_table() {
@@ -1075,10 +1082,11 @@ cpu_table() {
   echo "$top" | uawk -F'\t' "$AWKLIB"'
     { name[NR] = $6; cpu[NR] = $4; mem[NR] = $5; own[NR] = $3; if ($4 > mx) mx = $4 }
     END {
-      printf "  %s  %-30s  %-8s %7s %9s  %s%s\n", DIM, "PROCESS", "", "CPU", "MEMORY", "STARTED BY", RST
+      NW = (W >= 104 ? 40 : 30)
+      print "  " DIM "  " pad("PROCESS", NW) "  " pad("", 8) " " rp("CPU", 7) " " rp("MEMORY", 9) "  " "STARTED BY" RST
       for (i = 1; i <= NR; i++) {
         a = (own[i] != "-")
-        printf "  %s%s%s %s%s%s  %s%s%s %s%7s%s %s%9s%s  %s\n", (a ? scol(own[i]) DOT : DIM "○"), "", RST, (a ? scol(own[i]) : ""), pad(name[i], 30), RST, heat(cpu[i], 100, 250), bar(cpu[i] / mx, 8), RST, heat(cpu[i], 100, 250), sprintf("%.1f%%", cpu[i]), RST, heat(mem[i], 2000, 6000), mb(mem[i]), RST, (a ? scol(own[i]) BLD own[i] RST : DIM "not an agent" RST)
+        print "  " (a ? scol(own[i]) DOT : DIM "○") RST " " (a ? scol(own[i]) : "") pad(name[i], NW) RST "  " heat(cpu[i], 100, 250) bar(cpu[i] / mx, 8) RST " " heat(cpu[i], 100, 250) rp(sprintf("%.1f%%", cpu[i]), 7) RST " " heat(mem[i], 2000, 6000) rp(mb(mem[i]), 9) RST "  " (a ? scol(own[i]) BLD own[i] RST : DIM "not an agent" RST)
       }
     }'
   printf '  %sAgent processes: %s%s%s. Everything else: %s%s%s.%s\n' "$D" "$X$B$G" "$(cpu_txt "$AG_CPU")" "$X$D" "$X$B$Y" "$(cpu_txt "$(awk -v a="$ALL_CPU" -v g="$AG_CPU" 'BEGIN { v = a - g; if (v < 0) v = 0; print v }')")" "$X$D" "$X"
@@ -1091,10 +1099,11 @@ mem_table() {
   echo "$mt" | uawk -F'\t' "$AWKLIB"'
     { name[NR] = $5; mem[NR] = $4; own[NR] = $3; if ($4 > mx) mx = $4 }
     END {
-      printf "  %s  %-30s  %-8s %9s  %s%s\n", DIM, "PROCESS", "", "MEMORY", "STARTED BY", RST
+      NW = (W >= 104 ? 40 : 30)
+      print "  " DIM "  " pad("PROCESS", NW) "  " pad("", 8) " " rp("MEMORY", 9) "  " "STARTED BY" RST
       for (i = 1; i <= NR; i++) {
         a = (own[i] != "-")
-        printf "  %s%s%s %s%s%s  %s%s%s %s%9s%s  %s\n", (a ? scol(own[i]) DOT : DIM "○"), "", RST, (a ? scol(own[i]) : ""), pad(name[i], 30), RST, heat(mem[i], 2000, 6000), bar(mem[i] / mx, 8), RST, heat(mem[i], 2000, 6000), mb(mem[i]), RST, (a ? scol(own[i]) BLD own[i] RST : DIM "not an agent" RST)
+        print "  " (a ? scol(own[i]) DOT : DIM "○") RST " " (a ? scol(own[i]) : "") pad(name[i], NW) RST "  " heat(mem[i], 2000, 6000) bar(mem[i] / mx, 8) RST " " heat(mem[i], 2000, 6000) rp(mb(mem[i]), 9) RST "  " (a ? scol(own[i]) BLD own[i] RST : DIM "not an agent" RST)
       }
     }'
 }
@@ -1136,7 +1145,7 @@ snapshot() {
   section "AGENT SESSIONS" "each agent and everything it started"
   sessions_table
   local idle_installed; idle_installed=$(installed_scan | awk -F'\t' '$3 == 0 { printf "%s%s", (n++ ? ", " : ""), $1 }')
-  if [ -n "$idle_installed" ]; then printf '  %sInstalled here, not running: %s  (yare-doctor installed for where)%s\n' "$D" "$idle_installed" "$X"; fi
+  if [ -n "$idle_installed" ]; then printf '  %sInstalled here, not running: %s  (yare-doctor installed shows where)%s\n' "$D" "$idle_installed" "$X"; fi
   apps_table
   section "WHO IS USING THE CPU" "measured over about a second; the owner is the agent session that started it"
   cpu_table
@@ -1192,7 +1201,7 @@ watch_mode() {
   if (( ! JSON )); then
     banner "$VERSION $MID watching for ${WATCH_SECS}s $MID a sample every ${INTERVAL}s $MID read-only"
     printf '%sUse your Mac and your agents as you normally do.%s\n\n' "$D" "$X"
-    printf '  %s%-9s %-30s %6s %9s %13s %12s%s\n' "$D" "TIME" "AGENTS+APPS, % OF MAC" "LOAD" "SESSIONS" "AGENT BUILDS" "YOUR BUILDS" "$X"
+    printf '  %s%-9s %-23s %6s %9s %13s %12s%s\n' "$D" "TIME" "AGENTS+APPS, % OF MAC" "LOAD" "SESSIONS" "AGENT BUILDS" "YOUR BUILDS" "$X"
   fi
   for (( i = 1; i <= samples; i++ )); do
     SCAN=$(scan)
@@ -1256,13 +1265,13 @@ watch_mode() {
       NF >= 5 { r = $2; if (!(r in first)) { first[r] = $1; order[++no] = r; m0[r] = $5 } last[r] = $1; lab[r] = $3; c[r]++; sum[r] += $4; if ($4 > pk[r]) pk[r] = $4; m1[r] = $5 }
       END {
         if (!no) exit
-        printf "  %s%-12s %8s %8s %9s %9s  %s%s\n", DIM, "SESSION", "AVG CPU", "PEAK", "MEM START", "MEM END", "WHEN", RST
+        printf "  %s%-12s %8s  %8s  %9s  %9s  %s%s\n", DIM, "SESSION", "AVG CPU", "PEAK CPU", "MEM START", "MEM END", "WHEN", RST
         for (i = 1; i <= no; i++) {
           r = order[i]; w = ""
           if (first[r] > 1) w = w YEL "started " (first[r] - 1) * iv "s in" RST " "
           if (last[r] < n) w = w RED "ended " last[r] * iv "s in" RST " "
           if (w == "") w = DIM "whole time" RST
-          printf "  %s%s%-12s%s %s%7.1f%%%s %s%7.1f%%%s %9s %9s  %s\n", scol(lab[r]), BLD, lab[r], RST, heat(sum[r] / c[r], 50, 100), sum[r] / c[r], RST, heat(pk[r], 50, 100), pk[r], RST, mb(m0[r]), mb(m1[r]), w
+          printf "  %s%s%-12s%s %s%7.1f%%%s  %s%7.1f%%%s  %9s  %9s  %s\n", scol(lab[r]), BLD, lab[r], RST, heat(sum[r] / c[r], 50, 100), sum[r] / c[r], RST, heat(pk[r], 50, 100), pk[r], RST, mb(m0[r]), mb(m1[r]), w
         }
       }'
   fi
@@ -1823,6 +1832,9 @@ EOF2
   chk "--html is a complete page" "$(bash "${BASH_SOURCE[0]}" --from "$one2" --html 2>/dev/null | grep -c '</html>')" 1
   chk "--snippet launchd prints a plist" "$(bash "${BASH_SOURCE[0]}" --snippet launchd 2>/dev/null | grep -c '<key>StartInterval</key>')" 1
   chk "--snippet with an unknown kind fails" "$(bash "${BASH_SOURCE[0]}" --snippet nope >/dev/null 2>&1; echo $?)" 2
+  local tw; for tw in 80 100 110; do
+    chk "sessions table: header and rows are the same width at $tw columns" "$(COLUMNS=$tw bash "${BASH_SOURCE[0]}" --from "$one2" --sessions --ascii --no-color 2>/dev/null | awk '/^    SESSION/ { h = length($0) } /^  [^ ] claude#1/ { r = length($0) } END { print (h == r && h > 0) ? "same" : "differs " h " " r }')" same
+  done
   chk "--sessions shows only the sessions table" "$(bash "${BASH_SOURCE[0]}" --from "$one2" --sessions --no-color 2>/dev/null | grep -c 'claude#1')" 1
   chk "--installed runs and never launches an agent" "$(bash "${BASH_SOURCE[0]}" --from "$one2" --installed --no-color 2>&1 | grep -c 'CODING AGENTS FOUND')" 1
   rm -f "$one2"
@@ -2132,7 +2144,7 @@ awards() {
     END {
       i = best(mem, 1);   award("The Heavyweight", l[i], sprintf("holds %s", mb(mem[i])))
       i = best(cpu, 1);   if (cpu[i] >= 1) award("The Sprinter", l[i], sprintf("%.1f%% CPU right now", cpu[i]))
-      i = best(cm, 1);    if (cm[i] >= 1) award("The Workhorse", l[i], sprintf("%d CPU-minutes used so far", cm[i]))
+      i = best(cm, 1);    if (cm[i] >= 1) award("The Workhorse", l[i], sprintf("%d CPU-%s used so far", cm[i], (cm[i] == 1 ? "minute" : "minutes")))
       i = best(age, 1);   award("The Marathoner", l[i], sprintf("open for %s", human2(age[i])))
       i = best(procs, 1); award("The Crowd", l[i], sprintf("%d processes in one session", procs[i]))
       i = best(idm, 1);   if (idm[i] >= 20) award("The Packrat", l[i], sprintf("%s of helpers sitting idle", mb(idm[i])))
