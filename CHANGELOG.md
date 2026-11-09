@@ -9,6 +9,7 @@ First public release.
 **Detection**
 - Recognises 25 coding agents (Claude Code, Codex, Gemini, OpenCode, Aider, Cursor, Amp, Goose, Crush, Droid, Qwen, Kiro, Copilot, Hermes, Auggie, Cline, Plandex, OpenHands, Kimi, Devin, Kilo, Continue, Grok, Junie, Jules), including ones started through node, python, bun, uv, npx or an app bundle (the Claude desktop app's Code tab, Junie), and npm installs that ship `claude.exe`-style binaries.
 - Only the program an interpreter runs counts, never its arguments (`node server.js --name claude` is not a session). Desktop apps, `--version`, `login`, `mcp` and background daemons (`codex app-server --managed-daemon`, `opencode serve --service`, `cline --cline-hub-daemon`) are not counted as sessions.
+- Found on the first run on another Mac: the Claude in Chrome bridge (`claude --chrome-native-host`, started by the browser extension) is a service, not a session, and no longer makes the whole browser a "host app". The CPU row now shows the CPU actually in use, with the load average beside it: a high load with a quiet CPU (after a restart, while Spotlight indexes) is a note, not "busy".
 - An agent running as a background service (a Hermes gateway, `codex app-server --managed-daemon`, a Cline hub daemon) is listed as a service, not counted as a session.
 - Processes that look like a coding agent the doctor does not know (they start MCP servers, or run with agent-style flags) are listed; `YARE_DOCTOR_AGENTS=name` adds one by program name.
 - Sessions are numbered oldest first, so labels stay put. The host is found from the app, tmux or ssh (19 terminals and editors tested).
@@ -26,7 +27,7 @@ First public release.
 - `--json`, `--prom`, `--md`, `--html`, `--ascii`, `--light`, `--share`, `--redact`, `--oneline`, `--check` with budget limits and `--notify`, `--snippet launchd|cron|tmux|zsh|statusline`, `--completions bash|zsh`.
 
 **Trust**
-- `--selftest` (239 checks), `--checksum`, `--capture` (masks private words) and `--from FILE` to replay a process list on another machine. `tests/` has a generated test of about 1,300 command lines, a random process-tree test, a live end-to-end test and a recorder for real launches. CI runs them on macOS 15 (Apple silicon and Intel).
+- `--selftest` (244 checks), `--checksum`, `--capture` (masks private words) and `--from FILE` to replay a process list on another machine. `tests/` has a generated test of about 1,300 command lines, a random process-tree test, a live end-to-end test and a recorder for real launches. CI runs them on macOS 15 (Apple silicon and Intel).
 - Tested on one Mac so far. If it misses an agent on yours, send `bash yare-doctor.sh --capture` output in an issue.
 
 Read-only: no network, no files written, nothing stopped (the optional `--notify` shows a macOS notification). One bash script that works with the bash that ships with macOS (3.2).

@@ -249,7 +249,7 @@ scan() {
     if (e ~ /\/\.hermes\/hermes-agent\//) return "hermes"
     return ""
   }
-  function daemonargs(low) { return (low ~ / --managed-daemon( |$)| --service( |$)| app-server daemon | daemon pid-update-loop|--daemonize/) }
+  function daemonargs(low) { return (low ~ / --managed-daemon( |$)| --service( |$)| app-server daemon | daemon pid-update-loop|--daemonize| --chrome-native-host( |$)|chrome-extension:\/\/|moz-extension:\/\//) }
   # An agent started as a background service (a gateway, a daemon, a cron runner) waits for messages or jobs: it is not a working
   # session. agentname() returns "" for it and leaves the agent name in SVCNAME so the report can list it as a service.
   function svcmark(a) { SVCNAME = a; return "" }
@@ -794,7 +794,11 @@ stand_out() { # builds NOTES from what gather found
     note 2 "$(echo "$top" | cut -f6) is using $(echo "$top" | cut -f4)% CPU and it is not an agent. If your Mac feels slow, this may be the cause."
     case $(echo "$top" | cut -f6) in mds*|mdworker*) note 3 "Spotlight indexes folders that agents write into (node_modules, build output). Excluding them in System Settings > Spotlight can help." ;; esac
   fi
-  if awk -v l="${LOAD:-0}" -v c="$CORES" 'BEGIN { exit !(l / c >= 1.0) }'; then
+  local cpu_in_use; cpu_in_use=$(awk -v a="${ALL_CPU:-0}" -v c="$CORES" 'BEGIN { printf "%.0f", a / c }')
+  if awk -v l="${LOAD:-0}" -v c="$CORES" 'BEGIN { exit !(l / c >= 1.0) }' && (( cpu_in_use < 50 )); then
+    note 3 "The load average is high (${LOAD} on $CORES cores) but only ${cpu_in_use}% of the CPU is in use. The Mac is probably waiting on something else, often disk work such as Spotlight or media indexing after a restart, not on the CPU."
+  fi
+  if awk -v l="${LOAD:-0}" -v c="$CORES" 'BEGIN { exit !(l / c >= 1.0) }' && (( cpu_in_use >= 50 )); then
     local who="" tn tc to tk
     top=$(echo "$SCAN" | awk -F'\t' '$1 == "TOP" { k = $3 SUBSEP $6; c[k]++; cpu[k] += $4; own[k] = $3; nm[k] = $6 } END { for (k in c) printf "%s\t%.1f\t%s\t%d\n", nm[k], cpu[k], own[k], c[k] }' | sort -t"$TAB" -k2 -nr | head -1)
     if [ -n "$top" ]; then
@@ -803,7 +807,7 @@ stand_out() { # builds NOTES from what gather found
       if (( tk > 1 )); then who="$who ($tk processes)"; fi
       who="$who at ${tc}% of a core ($( [ "$to" = - ] && echo "not an agent" || echo "started by $to"))."
     fi
-    note 2 "The Mac is overloaded: its load is ${LOAD} on $CORES cores (1.0 per core means fully busy).$who"
+    note 2 "The Mac is overloaded: ${cpu_in_use}% of the CPU is in use and its load is ${LOAD} on $CORES cores (1.0 per core means fully busy).$who"
   fi
   top=$(echo "$SCAN" | awk -F'\t' '$1 == "MEM" && tolower($5) ~ /virtualization\.virtualmachine|qemu-system|com\.docker|docker desktop|vmmem|orbstack|colima|limactl|utm|prl_vm_app|virtualboxvm|krunkit/' | sort -t"$TAB" -k4 -nr | head -1)
   if [ -n "$top" ]; then
@@ -827,7 +831,7 @@ stand_out() { # builds NOTES from what gather found
   fi
   if (( PORT_N > 0 )); then note 3 "Agent sessions (or things they left behind) $( [ "$PORT_N" = 1 ] && echo is || echo are) holding $(pl "$PORT_N" "listening port") open. A new dev server on the same port can fail."; fi
   if (( SESS_N > 0 )); then
-    note 3 "$(pl "$SESS_N" "agent session") $( [ "$SESS_N" = 1 ] && echo is || echo are) running. Together $( [ "$SESS_N" = 1 ] && echo it || echo they) and the apps they run in use about $(cpu_txt "$UN_PTS") and $(fmt_size "${AG_MB}M") of memory (agent processes alone: $(cpu_txt "$AG_CPU"))."
+    note 3 "$(pl "$SESS_N" "agent session") $( [ "$SESS_N" = 1 ] && echo is || echo are) running. $( [ "$SESS_N" = 1 ] && echo "It and the app it runs in" || echo "Together they and the apps they run in") use about $(cpu_txt "$UN_PTS") and $(fmt_size "${AG_MB}M") of memory (agent processes alone: $(cpu_txt "$AG_CPU"))."
   fi
   if [ -z "$NOTES" ]; then note 4 "Nothing stands out right now. Run it again while an agent is working hard."; fi
 }
@@ -1002,15 +1006,16 @@ dash() {
   case $ENERGY in low) en="low power mode" ;; high) en="high power mode" ;; *) en="normal power mode" ;; esac
   if [ "${PSRC:-}" = battery ]; then pw="on battery"; onbat=1; else pw="plugged in"; fi
   swmb=$(echo "${SWAP:-0M}" | awk '/G/ { v = $1; sub(/G/, "", v); print v * 1024; next } { v = $1; sub(/M/, "", v); print v + 0 }')
-  uawk -v cpus="$CORES" -v load="${LOAD:-0}" -v used="$used" -v unp="$UN_PCT" -v untxt="$(cpu_txt "$UN_PTS")" -v ns="$SESS_N" -v chipname="$chip" -v ver="$ver" -v mem="$MEM_GB" -v up="${UPD:-?}" \
+  uawk -v cpus="$CORES" -v load="${LOAD:-0}" -v inuse="$(awk -v a="${ALL_CPU:-0}" -v c="$CORES" 'BEGIN { printf "%.1f", a / c }')" -v used="$used" -v unp="$UN_PCT" -v untxt="$(cpu_txt "$UN_PTS")" -v ns="$SESS_N" -v chipname="$chip" -v ver="$ver" -v mem="$MEM_GB" -v up="${UPD:-?}" \
     -v swap="$(fmt_size "${SWAP:-0M}")" -v swmb="$swmb" -v agmem="$(fmt_size "${AG_MB}M")" -v pw="$pw" -v onbat="$onbat" -v batt="${BATT:-}" -v en="$en" -v disk="${DISK:-?}" -v files="$(fmt_k "${F_OPEN:-0}")" -v procs="${P_NOW:-?}" -v compr="${COMPR:-}" -v gpu="${GPU:-}" -v gpugb="${GPU_GB:-}" -v mix="$(echo "$SCAN" | awk -F'\t' '$1 == "SESS" { split($2, a, "#"); c[a[1]]++ } END { for (k in c) printf "%s%s x%d", (n++ ? ", " : ""), k, c[k] }')" "$AWKLIB"'
   function lbl(i, name, col,   a) { split(ICONS, a, " "); return col a[i] RST " " col BLD pad(name, 8) RST }
   function blank(w,   s) { s = sprintf("%" w "s", ""); return s }
   BEGIN {
     sep = " " DIM MID RST " "
     printf "  %s %s%s%s%s%d cores%s%d GB%s%s%sup %s %s\n", lbl(1, "Mac", BLU), BLD, chipname, RST, sep, cpus, sep, mem, sep, ver, sep, up, (up == 1 ? "day" : "days")
-    pct = load / cpus * 100; l = lvl(pct, 70, 100)
-    printf "  %s %s %s %s%s%s%s load on %d cores %s(%d%% of capacity)%s\n", lbl(2, "CPU", ORG), gbar(load / cpus, 20), chip(l, "calm", "busy", "overloaded"), lcol(l), BLD, load, RST, cpus, DIM, pct, RST
+    pct = inuse + 0; if (pct > 100) pct = 100; l = lvl(pct, 70, 90)
+    hint = (load / cpus >= 1 && l == 0) ? "  " DIM "(load is high but little CPU is in use: the Mac may be waiting on disk or indexing)" RST : ""
+    print "  " lbl(2, "CPU", ORG) " " gbar(pct / 100, 20) " " chip(l, "calm", "busy", "overloaded") " " lcol(l) BLD sprintf("%.0f%%", pct) RST " in use now" sep "load " sprintf("%.1f", load) " on " cpus " cores" hint
     ml = lvl(used, 80, 90); sl = lvl(swmb, 2048, 8192); if (used < 70) sl = 0; l = (sl > ml) ? sl : ml
     t = sprintf("%s%s%d%%%s used%s%s%s%s swap%s", lcol(ml), BLD, used, RST, sep, lcol(sl), BLD swap, RST, "")
     if (compr != "") t = t sep compr " GB compressed"
@@ -1500,6 +1505,9 @@ EOF
   det hermes        '/Users/me/.hermes/hermes-agent/.hermes/bin/hermes'
   det hermes        '/Users/me/.hermes/hermes-agent/.hermes/bin/hermes chat'
   det -             '/Users/me/.cline/bin/.cline --cline-hub-daemon --cwd /tmp/w'
+  det -             '/Users/me/.local/bin/claude --chrome-native-host'
+  det -             '/Users/me/.local/share/claude/versions/2.1.319 --chrome-native-host chrome-extension://fcoeoabgfenejglbffodgkkbkcdhcgfn/'
+  det claude        '/Users/me/.local/bin/claude --chrome'
   det junie         '/Users/me/.local/share/junie/versions/3110.7/Applications/junie.app/Contents/MacOS/junie'
   det junie         '/Users/me/.local/share/junie/versions/3110.7/Applications/junie.app/Contents/MacOS/junie --resume'
   det -             '/Users/me/.local/share/junie/versions/3110.7/Applications/junie.app/Contents/MacOS/junie --version'
@@ -1720,6 +1728,16 @@ EOF3
   procs() { printf '%s\n' '100 1 S 0.0 9000 02:00:00 00:01.00 /opt/newagent/bin/newagent --resume'; }
   INSTANT=0; got=$(YARE_DOCTOR_AGENTS="NewAgent, other" scan | awk -F'\t' '$1 == "SESS" { printf "%s", $2 }'); INSTANT=1
   chk "YARE_DOCTOR_AGENTS adds an agent by name" "$got" "newagent#1"
+  # a high load average with a quiet CPU (a Mac right after a restart, busy indexing) is a note, not an "overloaded" warning
+  procs() { printf '%s\n' '100 1 S 0.0 9000 02:00:00 00:01.00 claude --resume'; }
+  local save_cores=$CORES save_fixture=$FIXTURE; CORES=12; FIXTURE=1
+  load1() { echo 15.58; }
+  INSTANT=0; prepare; INSTANT=1
+  chk "high load with a quiet CPU is noted, not called overloaded" "$(printf '%s' "$NOTES" | grep -c 'load average is high')$(printf '%s' "$NOTES" | grep -c 'is overloaded')" 10
+  procs() { printf '%s\n' '100 1 S 0.0 9000 02:00:00 00:01.00 claude --resume' '101 100 R 700.0 9000 02:00:00 20:00.00 clang -c big.c'; }
+  INSTANT=0; prepare; INSTANT=1
+  chk "high load with a busy CPU is called overloaded" "$(printf '%s' "$NOTES" | grep -c 'is overloaded')" 1
+  CORES=$save_cores; FIXTURE=$save_fixture; load1() { sysctl -n vm.loadavg 2>/dev/null | tr -d '{}' | awk '{print $1}'; }
   # a capture replayed with --from detects the same agents, and its masking leaves no secret behind
   local capf; capf=$(mktemp)
   printf '%s\n' '10 1 S 0.0 1000 02:00:00 00:00.10 /usr/local/bin/node --max-old-space-size=8192 /Users/me/SECRETPROJ/node_modules/@google/gemini-cli/dist/index.js --token=hunter2' \
@@ -2102,7 +2120,7 @@ card() {
   crow() { printf '%s %s%*s %s\n' "$V" "$2" $((w - ${#1})) "" "$V"; }
   gcol=$X; case $HGRADE in A|B) gcol=$G ;; C) gcol=$Y ;; D) gcol=$CO ;; *) gcol=$R ;; esac
   local bar_cpu bar_mem bar_ag
-  bar_cpu=$(uawk -v f="$(awk -v l="${LOAD:-0}" -v c="$CORES" 'BEGIN { printf "%.3f", l / c }')" "$AWKLIB"'BEGIN { printf "%s", gbar(f, 18) }')
+  bar_cpu=$(uawk -v f="$(awk -v a="${ALL_CPU:-0}" -v c="$CORES" 'BEGIN { v = a / c / 100; if (v > 1) v = 1; printf "%.3f", v }')" "$AWKLIB"'BEGIN { printf "%s", gbar(f, 18) }')
   bar_mem=$(uawk -v f="$(awk -v u="$mem_used" 'BEGIN { printf "%.3f", u / 100 }')" "$AWKLIB"'BEGIN { printf "%s", gbar(f, 18) }')
   bar_ag=$(uawk -v f="$(awk -v u="$UN_PCT" 'BEGIN { printf "%.3f", u / 100 }')" "$AWKLIB"'BEGIN { printf "%s", gbar(f, 18) }')
   printf '%s%s%s\n' "$D" "$top" "$X"
@@ -2111,8 +2129,8 @@ card() {
   crow "$plain" "$B$C$title$X$(printf '%*s' $((w - ${#title} - ${#right})) '')${D}health${X} ${gcol}${B}${HSCORE}/100  ${HGRADE}${X}"
   crow "${OSINFO#*, } $MID ${MEM_GB} GB $MID ${OSINFO%%,*}" "$D${OSINFO#*, } $MID ${MEM_GB} GB $MID ${OSINFO%%,*}$X"
   crow "" ""
-  plain="CPU     xxxxxxxxxxxxxxxxxx  load ${LOAD:-?} on $CORES cores"
-  crow "$plain" "${CO}CPU${X}     $bar_cpu  load ${B}${LOAD:-?}${X} on $CORES cores"
+  cpu_use=$(awk -v a="${ALL_CPU:-0}" -v c="$CORES" 'BEGIN { printf "%.0f", a / c }'); plain="CPU     xxxxxxxxxxxxxxxxxx  ${cpu_use}% in use · load ${LOAD:-?}"
+  crow "$plain" "${CO}CPU${X}     $bar_cpu  ${B}${cpu_use}%${X} in use · load ${LOAD:-?}"
   plain="Memory  xxxxxxxxxxxxxxxxxx  ${mem_used}% used $MID swap $(fmt_size "${SWAP:-0M}")"
   crow "$plain" "${CP}Memory${X}  $bar_mem  ${B}${mem_used}%${X} used $MID swap $(fmt_size "${SWAP:-0M}")"
   plain="Agents  xxxxxxxxxxxxxxxxxx  $(pl "$SESS_N" session) $MID $(fmt_size "${AG_MB}M")"
@@ -2200,7 +2218,7 @@ EOF
   many open files      2,000+ in one session, 60% of the system limit overall
   busy background      25%+ CPU, started by something that has already exited
   CPU measure          two samples of cumulative CPU time about 0.7 s apart (not ps's lifetime average)
-  overloaded           load average at or above the number of cores
+  overloaded           load average at or above the number of cores AND half the CPU in use (a high load with a quiet CPU is only noted)
   health score         100, minus 20 per "act on it" and 7 per "worth a look" (A 90, B 80, C 70, D 55)
 EOF
   printf '\n%sAll of this is read-only: ps, sysctl, pmset, vm_stat, ioreg, tmutil (status), lsof (listing). No network, no files.%s\n' "$D" "$X"
