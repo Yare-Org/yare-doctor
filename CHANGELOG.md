@@ -2,6 +2,10 @@
 
 Versions follow [semver](https://semver.org). The 0.x line means the output format and options can still change.
 
+## 0.3.1 (2026-11-08)
+
+Kiro, Devin and Plandex were launched for real (the vendors' own downloads, checksum-verified or inspected first, run with a throwaway HOME; Kiro and Plandex from their release archives instead of the installers, which write to /Applications and /usr/local) and their real process lists replayed. All three were detected correctly. With these, every one of the 25 agents has a real launch or a real live sighting behind it (the community `grok-cli` package needs an API key and exits at once; the Grok covered is xAI's). Self-test: 222 checks. No behaviour change.
+
 ## 0.3.0 (2026-11-08)
 
 - New `--html`: the whole report as one self-contained web page (light and dark, markup in process names escaped). Print-only: `yare-doctor.sh --html > report.html`. Works with `--redact` and the other views.

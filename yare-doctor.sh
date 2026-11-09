@@ -6,7 +6,7 @@
 #
 # What it does that Activity Monitor does not: it follows the parent chain of every process, so it can say which agent
 # session started what, how much of the Mac each session is holding, who is using the CPU, and what was left behind.
-VERSION="0.3.0"; RELEASED="2026-11-08"
+VERSION="0.3.1"; RELEASED="2026-11-08"
 set -u
 # cron and launchd start scripts with almost no environment: make sure HOME and the system tool folders exist
 if [ -z "${HOME:-}" ]; then HOME=$(dscl . -read "/Users/$(id -un)" NFSHomeDirectory 2>/dev/null | awk '{ print $2 }'); HOME=${HOME:-/var/root}; export HOME; fi
@@ -1411,6 +1411,11 @@ EOF
   det junie         'node /opt/homebrew/bin/junie --resume'
   det jules         '/Users/me/.local/bin/jules'
   det -             'grok --version'
+  det kiro-cli      '/tmp/live/kiro/kirocli/bin/kiro-cli chat'
+  det devin         '/tmp/live/home/.local/bin/devin'
+  det plandex       '/tmp/live/plandex/plandex'
+  det -             '/tmp/live/kiro/kirocli/bin/kiro-cli --version'
+  det -             '/tmp/live/home/.local/bin/devin login'
   det junie         '/Users/me/.local/share/junie/versions/3110.7/Applications/junie.app/Contents/MacOS/junie'
   det junie         '/Users/me/.local/share/junie/versions/3110.7/Applications/junie.app/Contents/MacOS/junie --resume'
   det -             '/Users/me/.local/share/junie/versions/3110.7/Applications/junie.app/Contents/MacOS/junie --version'
