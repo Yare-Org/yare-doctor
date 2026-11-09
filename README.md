@@ -18,26 +18,18 @@ bash yare-doctor.sh
 ```
 
 ```sh
-bash yare-doctor.sh                 # one snapshot, run it while your agents are working (about a second)
-bash yare-doctor.sh --watch 60      # sample for a minute: how often did an agent's build overlap yours?
-bash yare-doctor.sh --live          # refreshing view of sessions and CPU (q quits)
-bash yare-doctor.sh --sessions      # just the sessions table
-bash yare-doctor.sh --installed     # which coding agents and agent apps are installed here (nothing is run)
-bash yare-doctor.sh --tree          # every process each session started, as a tree
-bash yare-doctor.sh --why 1234      # who started process 1234? its chain up to the agent session
-bash yare-doctor.sh --cleanup       # what could be closed, with kill commands (printed, never run)
-bash yare-doctor.sh --card          # a small boxed summary with a health score, for screenshots
-bash yare-doctor.sh --html > report.html   # the report as one web page you can open or send
-bash yare-doctor.sh --snippet launchd      # config to paste so it runs on its own (also: cron, tmux, zsh, statusline)
-bash yare-doctor.sh --share         # also prints one line of counts you can paste in a reply
-bash yare-doctor.sh --redact        # hide folder, branch and helper names so the whole report is safe to paste
-bash yare-doctor.sh --json          # machine-readable output (--prom for Prometheus)
-bash yare-doctor.sh --check         # quiet; exit 0 nothing to do, 1 worth a look, 2 act on it (cron, scripts)
-bash yare-doctor.sh --check --notify   # same, plus a macOS notification when there is something to look at
-bash yare-doctor.sh --rules         # every rule and threshold it uses, including what counts as an agent
-bash yare-doctor.sh --selftest      # does every part work on this Mac?
-bash yare-doctor.sh --help          # all options
+yare-doctor                  # the whole picture now: each agent session, what it started, CPU and memory, builds, findings
+yare-doctor watch 60         # sample for a minute while an agent builds: did its build overlap yours?
+yare-doctor tree             # every process each session started, as a tree
+yare-doctor why 1234         # who started process 1234, and which agent session it belongs to
+yare-doctor cleanup          # what could be closed, with the kill commands (printed, never run)
+yare-doctor share            # adds one line of counts (no paths or names) to paste in a reply; add "redact" to hide folder names
+yare-doctor help             # the short list; "yare-doctor help all" shows every option (json, html, check, snippet, installed ...)
 ```
+
+Without Homebrew, replace `yare-doctor` with `bash yare-doctor.sh`. Every word is also an option (`--watch`, `--tree`, ...), so older commands keep working.
+
+If it shows a coding agent it does not know, or misses one, run `YARE_DOCTOR_AGENTS=name yare-doctor` to include it by program name, and send the output of `yare-doctor capture` in an issue.
 
 It is about 2,000 lines of bash. **Read it before you run it**; that is what it is for. Every release has a checksum (`bash yare-doctor.sh --checksum`) you can compare with the release notes. Changes are in [CHANGELOG.md](CHANGELOG.md).
 
@@ -94,6 +86,7 @@ Processes that no longer have a parent (a dev server an agent left running, or a
 ## What it reports
 
 - **What stands out**: a few plain sentences at the top, only about things it actually found.
+- **Background services**: an agent running as a service, for example a Hermes gateway waiting for messages, is listed as a service and not counted as a session.
 - **Agent sessions**: each session of the 25 coding agents it recognises (Claude Code, Codex, Gemini, OpenCode, Cursor, Copilot, Amp, Aider, Goose, Kilo, Junie, Jules, Grok and more; `--rules` lists them all) and *everything it started*, with the folder it works in, the app it runs in (Terminal, iTerm, VS Code, T3 Code, tmux, ...), how many files it holds open, how long it has been running, when it last started a process (ACTIVE), process count, CPU, memory, CPU time used so far, and builds. Activity Monitor lists processes; this groups them by which agent started them.
 - **Who is using the CPU and memory right now, and who started it.** If your Mac feels slow, this shows whether it is an agent's tree or something else (often it is not the agent).
 - **Idle helpers**: helper processes inside a session that have been alive over 30 minutes and barely used any CPU, with the memory they hold. (An MCP server waiting for requests looks like this too, so it is a pointer, not a verdict.)

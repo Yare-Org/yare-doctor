@@ -18,6 +18,25 @@ usage() {
   cat <<EOF
 ${b}yare-doctor $VERSION${x}  ${d}what are your coding agents doing to this Mac? Read-only.${x}
 
+${b}yare-doctor${x}            the whole picture now: sessions, what each started, CPU and memory, builds, findings
+${b}yare-doctor watch${x} [S]  sample for S seconds (default 60): did an agent's build overlap yours?
+${b}yare-doctor live${x}       the same, refreshing (q quits)
+${b}yare-doctor tree${x}       every process each session started, as a tree
+${b}yare-doctor why${x} PID    who started this process, and which agent session it belongs to
+${b}yare-doctor cleanup${x}    what could be closed, with the kill commands (printed, never run)
+${b}yare-doctor share${x}      add a line of counts (no paths or names) to paste in a reply;  add ${b}redact${x} to hide folder names
+${b}yare-doctor json${x}       the same data as JSON         ${b}yare-doctor help all${x}  every option (installed, html, check, snippet ...)
+
+${d}It never changes anything: no network, no files written, nothing stopped. Read it first.${x}
+EOF
+}
+
+usage_all() {
+  local b="" d="" x=""
+  if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != dumb ]; then b=$'\033[1m'; d=$'\033[2m'; x=$'\033[0m'; fi
+  cat <<EOF
+${b}yare-doctor $VERSION${x}  ${d}what are your coding agents doing to this Mac? Read-only.${x}
+
 ${b}USAGE${x}   bash yare-doctor.sh [option]
 
 ${b}LOOK${x}
@@ -68,7 +87,13 @@ EOF
 
 MODE=snapshot; HTML=0; SNIP=; NOTIFY=0; WATCH_SECS=60; SHARE=0; JSON=0; INTERVAL=5; REDACT=0; WHY_PID=; COLOR=auto; TREE_LABEL=; COMPL_SHELL=; WANT_TREE=0; MD=0; ASCII=0; THEME=${YARE_DOCTOR_THEME:-dark}; FROM_FILE=; FIXTURE=0; CMP_A=; CMP_B=; LIMIT_MEM=0; LIMIT_CPU=0; LIMIT_SESS=0
 while [ $# -gt 0 ]; do
+  # plain words work like the options: yare-doctor watch 60, tree, why 1234, share redact, json ...
   case $1 in
+    help) if [ "${2:-}" = all ]; then usage_all; else usage; fi; exit 0 ;;
+    watch|live|tree|why|cleanup|share|redact|json|sessions|installed|check|card|awards|zoo|vibe|slow|compare|rules|selftest|version|license|capture|html|snippet|completions|prom|oneline|checksum|notify) set -- "--$1" "${@:2}" ;;
+  esac
+  case $1 in
+    --help-all|--all) usage_all; exit 0 ;;
     --watch) MODE=watch; if [[ ${2:-} =~ ^[0-9]+$ ]]; then WATCH_SECS=$2; shift; fi ;;
     --share) SHARE=1 ;;
     --json) JSON=1 ;;
@@ -140,6 +165,8 @@ TAB=$'\t'
 #   WAIT pid owner age name                                a process in a session that is probably waiting for a person to answer
 #   MCPS label count memMB                                 MCP servers a session started
 #   NOW label pid cpu% age name                            the busiest process a session is running right now
+#   UNK name pid age                                       a process that looks like a coding agent we do not recognise
+#   SVC agent pid age memMB                                an agent running as a background service (hermes gateway, a daemon): listed, not a session
 real_procs() { ps -axww -o pid=,ppid=,stat=,pcpu=,rss=,etime=,time=,command= 2>/dev/null; }
 procs() { if [ -n "$FROM_FILE" ]; then cat "$FROM_FILE"; else real_procs; fi; }
 SAMPLE_GAP=0.7; INSTANT=1
@@ -153,7 +180,7 @@ scan() {
   if (( INSTANT )); then first=$(first_snapshot); t0=$(now); sleep "$SAMPLE_GAP"; fi
   t1=$(now); second=$(procs)
   if (( INSTANT )); then dt=$(awk -v a="$t0" -v b="$t1" -v g="$SAMPLE_GAP" 'BEGIN { d = b - a; if (d < 0.3) d = g; printf "%.3f", d }'); fi
-  { if (( INSTANT )); then printf '%s\n' "$first" | awk '{ print "T0 " $1 " " $2 }'; fi; printf '%s\n' "$second"; } | awk -v dt="$dt" -v SELF=$$ -v TREE="${WANT_TREE:-0}" '
+  { if (( INSTANT )); then printf '%s\n' "$first" | awk '{ print "T0 " $1 " " $2 }'; fi; printf '%s\n' "$second"; } | awk -v EXTRA="$(printf ',%s,' "${YARE_DOCTOR_AGENTS:-}" | tr 'A-Z ' 'a-z,' | tr -cd 'a-z0-9._,-' | tr -s ',')" -v dt="$dt" -v SELF=$$ -v TREE="${WANT_TREE:-0}" '
   function etsecs(t,   d, x, p, n) {
     d = 0
     if (index(t, "-")) { split(t, x, "-"); d = x[1]; t = x[2] }
@@ -183,6 +210,7 @@ scan() {
   function stripext(s) { sub(/\.(js|mjs|cjs|ts|py|rb|jar|exe)$/, "", s); return s }
   function isinterp(b) { return b ~ /^(node|nodejs|bun|deno|python|python2|python3|python[0-9]+\.[0-9]+|ruby|uv|uvx|npx|bunx|pnpm|pnpx|yarn|tsx|ts-node|java|perl)$/ }
   function canon(b) {
+    if (EXTRA != "" && index(EXTRA, "," b ",")) return b
     if (b == "claude" || b == "claude-code") return "claude"
     if (b == "codex" || b == "codex-cli") return "codex"
     if (b == "gemini" || b == "gemini-cli") return "gemini"
@@ -222,6 +250,10 @@ scan() {
     return ""
   }
   function daemonargs(low) { return (low ~ / --managed-daemon( |$)| --service( |$)| app-server daemon | daemon pid-update-loop|--daemonize/) }
+  # An agent started as a background service (a gateway, a daemon, a cron runner) waits for messages or jobs: it is not a working
+  # session. agentname() returns "" for it and leaves the agent name in SVCNAME so the report can list it as a service.
+  function svcmark(a) { SVCNAME = a; return "" }
+  function servicecmd(w) { return (w ~ /^(gateway|daemon|cron|supervisor|relay|hub-daemon)$/) }
   function nonsession(w) { return (w ~ /^(--version|-v|-version|version|--help|-h|help|login|logout|update|upgrade|doctor|config|completion|install|uninstall|setup-token|migrate-installer|auth|plugin|plugins|mcp)$/) }
   # The program an interpreter runs: the script after the interpreter own flags (node --import x script.js), the module after -m
   # (python -m aider), or the package after a runner flags and subcommands (npx -y pkg, uv tool run x, bun run x). Anything after
@@ -252,7 +284,8 @@ scan() {
       n = split(substr(low, 1, i - 1), bp, "/")
       if (canon(tok) != "" && bp[n] == tok) {
         rest = substr(rest, length(tok) + 2); split(rest, t, " ")
-        if (nonsession(t[1]) || daemonargs(low)) return ""
+        if (daemonargs(low)) return svcmark(canon(tok))
+        if (nonsession(t[1])) return ""
         return canon(tok)
       }
     }
@@ -260,16 +293,20 @@ scan() {
     n = split(low, t, " "); b = base(exe0(low)); a = ""
     if (isinterp(b)) {
       k = interptarget(t, n, b)
-      if (k == 0) { if (low ~ /\.hermes\/hermes-agent/) return "hermes"; return "" }   # inline code (python -c) that loads the Hermes agent
+      if (k == 0) {   # inline code (python -c) that loads the Hermes agent: its gateway and cron runners are services
+        if (low ~ /\.hermes\/hermes-agent/) { if (low ~ / (gateway|cron)( |$)|--external-supervisor|--run-module hermes_cli\.stderr_timestamp/) return svcmark("hermes"); return "hermes" }
+        return ""
+      }
       tok = t[k]; sub(/@[^\/@]*$/, "", tok)
       if (t[k - 1] == "-m") sub(/\..*/, "", tok)
       a = canon(stripext(base(tok)))
       if (a == "") a = pkgagent(tok)
     } else { a = canon(stripext(b)); k = 1; if (a == "") a = exeagent(exe0(low)) }
     if (a == "") return ""
-    if (daemonargs(low)) return ""
+    if (daemonargs(low)) return svcmark(a)
     w = t[k + 1]
     if (nonsession(w)) return ""
+    if (servicecmd(w)) return svcmark(a)
     if (a == "goose" && w !~ /^(session|run|web|acp)$/) return ""
     if (a == "hermes" && low !~ /hermes-agent|\.hermes\/|hermes_cli/) return ""
     return a
@@ -367,9 +404,12 @@ scan() {
     for (pid in drop) delete n[pid]
     for (pid in n) {
       if (pid in HELP) continue
-      a = agentname(LOW[pid])
+      SVCNAME = ""; a = agentname(LOW[pid])
       if (a != "") { AG[pid] = a; ac[a]++; acpu[a] += C[pid]; amem[a] += R[pid] / 1024 }
+      else if (SVCNAME != "") SV[pid] = SVCNAME
     }
+    for (pid in SV) { q = pid; for (s = 0; s < 40 && (P[q] in SV); s++) q = P[q]; svmem[q] += R[pid] / 1024 }
+    for (pid in SV) if (!(P[pid] in SV) && etsecs(E[pid]) >= 120) printf "SVC\t%s\t%s\t%s\t%d\n", SV[pid], pid, human(etsecs(E[pid])), svmem[pid]
     for (a in ac) printf "AGENT\t%s\t%d\t%.1f\t%d\n", a, ac[a], acpu[a], amem[a]
 
     # topmost agent above (or at) each process = the session it belongs to
@@ -407,6 +447,23 @@ scan() {
       if (r == "" || pid == r || (pid in HELP)) continue
       if (low ~ /(^|[ \/@._-])mcp([ \/@._-]|$)|modelcontextprotocol|playwright-mcp/ && agentname(low) == "" && progname(low) !~ /^-?(sh|bash|zsh|fish|dash|env|npm|npx)$/) MCPP[pid] = 1
     }
+    # agents we do not recognise: a process outside every session that starts MCP servers (found by walking up from the server past
+    # shells and npm), or that runs with an agent-style flag. They are listed so they can be added (YARE_DOCTOR_AGENTS) or reported.
+    for (pid in n) {
+      if (ROOT[pid] != "" || (pid in HELP) || (pid in SV)) continue
+      low = LOW[pid]
+      if (low ~ /--output-format[ =]stream-json|--dangerously-skip-permissions|--mcp-config|--allowedtools/) { SVCNAME = ""; if (agentname(low) == "" && SVCNAME == "") UNK[pid] = 1; continue }
+      if (!(low ~ /(^|[ \/@._-])mcp([ \/@._-]|$)|modelcontextprotocol|playwright-mcp/)) continue
+      q = P[pid]
+      for (s = 0; s < 12 && (q in n); s++) {
+        lq = LOW[q]; b = progname(lq)
+        if (index(CMD[q], ".app/Contents/MacOS/") || b ~ /^(login|sshd|sshd-session|tmux|screen|su|sudo|launchd)$/) { q = ""; break }
+        if (b ~ /^-?(sh|bash|zsh|fish|dash|env|npm|npx)$/ || lq ~ /(^|[ \/@._-])mcp([ \/@._-]|$)|modelcontextprotocol|playwright-mcp/) { q = P[q]; continue }
+        break
+      }
+      if (q != "" && (q in n) && ROOT[q] == "" && !(q in HELP) && !(q in SV)) { SVCNAME = ""; if (agentname(LOW[q]) == "" && SVCNAME == "") UNK[q] = 1 }
+    }
+    for (pid in UNK) if (!(P[pid] in UNK)) printf "UNK\t%s\t%s\t%s\n", progname(LOW[pid]), pid, human(etsecs(E[pid]))
     for (pid in MCPP) { r = ROOT[pid]; mcpm[r] += R[pid] / 1024; if (!(P[pid] in MCPP)) mcpn[r]++ }
     for (r in mcpn) printf "MCPS\t%s\t%d\t%d\n", LABEL[r], mcpn[r], mcpm[r]
     # the app each session runs in = the topmost ancestor below launchd; its whole tree counts as the host app of the session
@@ -576,7 +633,8 @@ git_running() { pgrep -x git >/dev/null 2>&1; }
 # "Unable to create index.lock". Reported only when no git process is running at all and the file is older than two minutes.
 git_locks() { # path<TAB>session pid<TAB>age in seconds
   [ "$FIXTURE" = 1 ] && return
-  git_running && return
+  # a live git command holds a lock for seconds, so 2 minutes old is stale; while git runs elsewhere (editors poll it constantly) wait 10
+  local min=120; git_running && min=600
   local pid path d g f age now; now=$(date +%s)
   while IFS=$'\t' read -r pid path; do
     [ -n "${pid:-}" ] || continue
@@ -585,7 +643,7 @@ git_locks() { # path<TAB>session pid<TAB>age in seconds
     [ -n "$g" ] || continue
     if [ -f "$g" ]; then g=$(sed -n 's/^gitdir: //p' "$g" 2>/dev/null | head -1); case $g in /*) ;; *) g="$d/$g" ;; esac; fi
     for f in index.lock HEAD.lock shallow.lock packed-refs.lock; do
-      if [ -f "$g/$f" ]; then age=$(( now - $(stat -f %m "$g/$f" 2>/dev/null || echo "$now") )); if (( age > 120 )); then printf '%s\t%s\t%d\n' "$g/$f" "$pid" "$age"; fi; fi
+      if [ -f "$g/$f" ]; then age=$(( now - $(stat -f %m "$g/$f" 2>/dev/null || echo "$now") )); if (( age > min )); then printf '%s\t%s\t%d\n' "$g/$f" "$pid" "$age"; fi; fi
     done
   done <<< "$FOLDERS"
 }
@@ -634,7 +692,7 @@ gather() { # fills the globals the report and the share line use, from $SCAN
   A_N=$(total AGENT "" 3)
   B_AGENT=$(total BUILD agent 3); B_AGENT_CPU=$(total BUILD agent 4)
   B_OWN=$(total BUILD own 3); B_OWN_CPU=$(total BUILD own 4)
-  LEFT_N=$(count LEFT); SESS_N=$(count SESS); DUP_N=$(count DUP); RUN_N=$(count RUN); STUCK_N=$(count STUCK)
+  UNK_N=$(count UNK); SVC_N=$(count SVC); LEFT_N=$(count LEFT); SESS_N=$(count SESS); DUP_N=$(count DUP); RUN_N=$(count RUN); STUCK_N=$(count STUCK)
   ALL_CPU=$(total TOT "" 2); AG_CPU=$(total TOT "" 4); AG_MB=$(total TOT "" 5); P_NOW=$(total TOT "" 6)
   AG_PCT=$(pct "$AG_CPU"); UN_PTS=$(total TOT "" 7); UN_PCT=$(pct "$UN_PTS")
   IDLE_N=$(total SESS "" 9); IDLE_MB=$(total SESS "" 10); FORGOT_N=$(total SESS "" 12)
@@ -668,6 +726,14 @@ collisions() {
 stand_out() { # builds NOTES from what gather found
   NOTES=""
   local line top
+  if (( UNK_N > 0 )); then
+    line=$(echo "$SCAN" | awk -F'\t' '$1 == "UNK" { printf "%s%s (pid %s, open %s)", (n++ ? ", " : ""), $2, $3, $4 }')
+    note 3 "$(pl "$UNK_N" "process looks" "processes look") like a coding agent the doctor does not recognise: $line. It is not counted. If it is one, run YARE_DOCTOR_AGENTS=NAME yare-doctor to include it, and please send the output of yare-doctor capture so the next version knows it."
+  fi
+  if (( SVC_N > 0 )); then
+    line=$(echo "$SCAN" | awk -F'\t' '$1 == "SVC" { printf "%s%s (open %s, %d MB)", (n++ ? ", " : ""), $2, $4, $5 }')
+    note 3 "$(pl "$SVC_N" "agent is" "agents are") running as a background service: $line. A service waits for messages or jobs, so it is not counted as a session. What it starts while it works appears under no session."
+  fi
   while IFS=$'\t' read -r _ pid owner cpu age name; do
     [ -n "${pid:-}" ] && note 1 "$name (pid $pid, started by $owner) is using ${cpu}% CPU and has been running $age. It may be stuck in a loop."
   done <<< "$(echo "$SCAN" | awk -F'\t' '$1 == "RUN"')"
@@ -706,7 +772,7 @@ stand_out() { # builds NOTES from what gather found
     lk_n=$(echo "$LOCKS" | awk 'NF { n++ } END { print n + 0 }')
     IFS=$'\t' read -r lk_first _ lk_age <<< "$(echo "$LOCKS" | head -1)"
     if (( REDACT )); then lk_first="a lock file"; else lk_first="${lk_first##*/.git/}"; fi
-    note 2 "$(pl "$lk_n" "stale git lock" "stale git locks") ($lk_first, left $(awk -v s="$lk_age" 'BEGIN { if (s >= 3600) printf "%dh ago", s / 3600; else printf "%dm ago", s / 60 }')) and no git command is running. Git commands in those folders fail with 'Unable to create index.lock' until the file is removed (--cleanup shows the command)."
+    note 2 "$(pl "$lk_n" "stale git lock" "stale git locks") ($lk_first, left $(awk -v s="$lk_age" 'BEGIN { if (s >= 3600) printf "%dh ago", s / 3600; else printf "%dm ago", s / 60 }')) and old enough that nothing is using it. Git commands in those folders fail with 'Unable to create index.lock' until the file is removed (--cleanup shows the command)."
   fi
   line=$(storms | awk -F'\t' '{ printf "%s%s (%d processes, %d started in the last minute)", (n++ ? "; " : ""), $1, $2, $3 }')
   if [ -n "$line" ]; then note 2 "A session is starting processes at a very high rate, which usually means a tool loop or a retry storm: $line."; fi
@@ -1037,7 +1103,7 @@ footer() {
   local fw=$(( ${COLS:-100} > 100 ? 100 : ${COLS:-100} - 2 ))
   (( fw < 40 )) && fw=40
   printf '\n%s%s%s\n' "$D" "$(printf '%s' 'A rough snapshot, not a benchmark: the idle, leftover and runaway checks are heuristics. CPU is measured over about a second, so a short spike can be missed or caught.' | fold -s -w "$fw")" "$X"
-  printf '%s%s%s\n' "$D" "$(printf '%s' 'Try --watch 60 while an agent builds, --live for a refreshing view, --why PID for who started a process.' | fold -s -w "$fw")" "$X"
+  printf '%s%s%s\n' "$D" "$(printf '%s' 'More: yare-doctor tree (every process), cleanup, watch 60 (while an agent builds), live, share, help all.' | fold -s -w "$fw")" "$X"
   if (( SHARE )); then
     section "PASTE-ABLE SUMMARY" "counts only: no paths, user names or commands"
     echo "$1"
@@ -1052,9 +1118,11 @@ snapshot() {
 
   if (( JSON )); then
     local sj; sj=$(echo "$SCAN" | awk -F'\t' '$1 == "SESS" { split($2, ag, "#"); printf "%s{\"label\":\"%s\",\"agent\":\"%s\",\"pid\":%d,\"processes\":%d,\"cpu_percent\":%s,\"memory_mb\":%d,\"cpu_minutes\":%d,\"idle_helpers\":%d,\"builds\":%d,\"looks_forgotten\":%s,\"host\":\"%s\",\"age_seconds\":%d}", (n++ ? "," : ""), $2, ag[1], $3, $5, $6, $7, $8, $9, $11, ($12 == 1 ? "true" : "false"), $15, $19 }')
+    local ukj; ukj=$(echo "$SCAN" | awk -F'\t' '$1 == "UNK" { printf "%s{\"name\":\"%s\",\"pid\":%d,\"age\":\"%s\"}", (n++ ? "," : ""), $2, $3, $4 }')
+    local svj; svj=$(echo "$SCAN" | awk -F'\t' '$1 == "SVC" { printf "%s{\"agent\":\"%s\",\"pid\":%d,\"age\":\"%s\",\"memory_mb\":%d}", (n++ ? "," : ""), $2, $3, $4, $5 }')
     local fj; fj=$(printf '%s' "$NOTES" | awk -F'\t' 'NF { t = $2; gsub(/\\/, "\\\\", t); gsub(/"/, "\\\"", t); printf "%s{\"level\":\"%s\",\"text\":\"%s\"}", (n++ ? "," : ""), ($1 == 1 ? "act" : $1 == 2 ? "look" : $1 == 3 ? "info" : "ok"), t }')
-    printf '{"version":"%s","macos":"%s","cores":%s,"memory_gb":%s,"load_1m":%s,"swap_used":"%s","agents":%s,"agent_sessions":%s,"agent_cpu_percent_of_machine":%s,"agent_memory_mb":%s,"agent_builds":%s,"other_builds":%s,"possible_leftovers":%s,"idle_helpers":%s,"idle_helper_mb":%s,"repeated_helpers":%s,"ports_held":%s,"possible_runaways":%s,"suspended_or_zombie":%s,"forgotten_sessions":%s,"sleep_locks_by_agents":%s,"shared_folders":%s,"disk_free_gb":%s,"energy_mode":"%s","agent_cpu_percent_with_host_apps":%s,"agent_cpu_points_one_core":%s,"agent_with_host_apps_points_one_core":%s,"gpu_percent":%s,"compressed_memory_gb":%s,"time_machine_running":%s,"hung_builds":%s,"health_score":%s,"health_grade":"%s","reclaimable_mb":%s,"findings":[%s],"sessions":[%s]}\n' \
-      "$VERSION" "$OSINFO" "$CPUS" "$MEM_GB" "${LOAD:-null}" "${SWAP:-?}" "$A_N" "$SESS_N" "$AG_PCT" "$AG_MB" "$B_AGENT" "$B_OWN" "$LEFT_N" "$IDLE_N" "$IDLE_MB" "$DUP_N" "$PORT_N" "$RUN_N" "$STUCK_N" "$FORGOT_N" "$AWAKE_N" "$SHARED_N" "${DISK:-null}" "$ENERGY" "$UN_PCT" "$AG_CPU" "$UN_PTS" "${GPU:-null}" "${COMPR:-null}" "$([ -n "${TM:-}" ] && echo true || echo false)" "$HUNG_N" "$HSCORE" "$HGRADE" "$RECLAIM_MB" "$fj" "$sj"
+    printf '{"version":"%s","macos":"%s","cores":%s,"memory_gb":%s,"load_1m":%s,"swap_used":"%s","agents":%s,"agent_sessions":%s,"agent_cpu_percent_of_machine":%s,"agent_memory_mb":%s,"agent_builds":%s,"other_builds":%s,"possible_leftovers":%s,"idle_helpers":%s,"idle_helper_mb":%s,"repeated_helpers":%s,"ports_held":%s,"possible_runaways":%s,"suspended_or_zombie":%s,"forgotten_sessions":%s,"sleep_locks_by_agents":%s,"shared_folders":%s,"disk_free_gb":%s,"energy_mode":"%s","agent_cpu_percent_with_host_apps":%s,"agent_cpu_points_one_core":%s,"agent_with_host_apps_points_one_core":%s,"gpu_percent":%s,"compressed_memory_gb":%s,"time_machine_running":%s,"hung_builds":%s,"health_score":%s,"health_grade":"%s","reclaimable_mb":%s,"findings":[%s],"sessions":[%s],"services":[%s],"unknown_agents":[%s]}\n' \
+      "$VERSION" "$OSINFO" "$CPUS" "$MEM_GB" "${LOAD:-null}" "${SWAP:-?}" "$A_N" "$SESS_N" "$AG_PCT" "$AG_MB" "$B_AGENT" "$B_OWN" "$LEFT_N" "$IDLE_N" "$IDLE_MB" "$DUP_N" "$PORT_N" "$RUN_N" "$STUCK_N" "$FORGOT_N" "$AWAKE_N" "$SHARED_N" "${DISK:-null}" "$ENERGY" "$UN_PCT" "$AG_CPU" "$UN_PTS" "${GPU:-null}" "${COMPR:-null}" "$([ -n "${TM:-}" ] && echo true || echo false)" "$HUNG_N" "$HSCORE" "$HGRADE" "$RECLAIM_MB" "$fj" "$sj" "$svj" "$ukj"
     return
   fi
 
@@ -1067,6 +1135,8 @@ snapshot() {
   print_notes
   section "AGENT SESSIONS" "each agent and everything it started"
   sessions_table
+  local idle_installed; idle_installed=$(installed_scan | awk -F'\t' '$3 == 0 { printf "%s%s", (n++ ? ", " : ""), $1 }')
+  if [ -n "$idle_installed" ]; then printf '  %sInstalled here, not running: %s  (yare-doctor installed for where)%s\n' "$D" "$idle_installed" "$X"; fi
   apps_table
   section "WHO IS USING THE CPU" "measured over about a second; the owner is the agent session that started it"
   cpu_table
@@ -1416,6 +1486,11 @@ EOF
   det plandex       '/tmp/live/plandex/plandex'
   det -             '/tmp/live/kiro/kirocli/bin/kiro-cli --version'
   det -             '/tmp/live/home/.local/bin/devin login'
+  det -             '/Users/me/.hermes/hermes-agent/.hermes/bin/hermes gateway run --external-supervisor'
+  det -             '/Users/me/.hermes/tools/python-3.14.7/bin/python3 -I -c import os, re, sys\012sys.path.insert(0, /Users/me/.hermes/hermes-agent)\012from hermes_cli.main import main\012sys.exit(main())\012 gateway run --external-supervisor'
+  det hermes        '/Users/me/.hermes/hermes-agent/.hermes/bin/hermes'
+  det hermes        '/Users/me/.hermes/hermes-agent/.hermes/bin/hermes chat'
+  det -             '/Users/me/.cline/bin/.cline --cline-hub-daemon --cwd /tmp/w'
   det junie         '/Users/me/.local/share/junie/versions/3110.7/Applications/junie.app/Contents/MacOS/junie'
   det junie         '/Users/me/.local/share/junie/versions/3110.7/Applications/junie.app/Contents/MacOS/junie --resume'
   det -             '/Users/me/.local/share/junie/versions/3110.7/Applications/junie.app/Contents/MacOS/junie --version'
@@ -1591,6 +1666,51 @@ EOF3
     '48505 1 Ss+ 0.1 87792 00:08 0:00.21 /tmp/live/grok/node_modules/.bin/grok'; }
   INSTANT=0; got=$(scan | awk -F'\t' '$1 == "SESS" { printf "%s:%d\n", $2, $5 }' | sort | tr '\n' ' '); INSTANT=1
   chk "real Cline (3 processes), Jules (2) and Grok (1) shapes are one session each" "$got" "cline#1:3 grok#1:1 jules#1:2 "
+  # the Hermes gateway seen on a real Mac (osascript wrapper, then two python processes): a service, not a session
+  procs() { printf '%s\n' '1163 1 S 0.0 3000 05:57:23 0:00.06 /usr/bin/osascript -l JavaScript -e exec /Users/me/.hermes/hermes-agent/.hermes/bin/hermes --run-module hermes_cli.stderr_timestamp -- /Users/me/.hermes/hermes-agent/.hermes/bin/hermes gateway run --external-supervisor' \
+    '1452 1163 S 0.0 14000 05:57:20 0:11.71 /Users/me/.hermes/tools/py/bin/python3 -I -c import sys\012sys.path.insert(0, /Users/me/.hermes/hermes-agent)\012from hermes_cli.main import main\012 --run-module hermes_cli.stderr_timestamp -- hermes gateway run --external-supervisor' \
+    '2067 1452 S 0.3 99000 05:57:15 5:13.24 /Users/me/.hermes/tools/py/bin/python3 -I -c import sys\012sys.path.insert(0, /Users/me/.hermes/hermes-agent)\012from hermes_cli.main import main\012 gateway run --external-supervisor'; }
+  INSTANT=0; got=$(scan | awk -F'\t' '$1 == "SESS" { s++ } $1 == "SVC" { v++; m += $5 } END { printf "%d sessions %d service %d MB", s, v, m }'); INSTANT=1
+  chk "an idle Hermes gateway is listed as a service, not counted as a session" "$got" "0 sessions 1 service 110 MB"
+  # agents the doctor does not know: listed once, never counted as sessions; YARE_DOCTOR_AGENTS adds one by name
+  unk() { # fixture on stdin -> "UNK names" found
+    local fx; fx=$(cat); procs() { printf '%s\n' "$fx"; }
+    INSTANT=0; got=$(scan | awk -F'\t' '$1 == "UNK" { printf "%s ", $2 } $1 == "SESS" { printf "session:%s ", $2 }'); INSTANT=1; echo "${got:-none}"
+  }
+  chk "an unknown agent that starts MCP servers is listed" "$(unk <<'EOF3'
+100 1 S 0.0 9000 02:00:00 00:01.00 /opt/newagent/bin/newagent --resume
+101 100 S 0.0 9000 02:00:00 00:01.00 npm exec some-mcp-server@latest
+102 101 S 0.0 9000 02:00:00 00:01.00 node /x/some-mcp-server
+EOF3
+)" "newagent "
+  chk "an unknown agent with agent-style flags is listed" "$(unk <<'EOF3'
+100 1 S 0.0 9000 02:00:00 00:01.00 /opt/newagent2/bin/newagent2 --output-format stream-json --verbose
+EOF3
+)" "newagent2 "
+  chk "MCP servers under a desktop app are not an unknown agent" "$(unk <<'EOF3'
+100 1 S 0.0 9000 02:00:00 00:01.00 /Applications/Some Editor.app/Contents/MacOS/Some Editor
+101 100 S 0.0 9000 02:00:00 00:01.00 node /x/some-mcp-server
+EOF3
+)" none
+  chk "an MCP server started by hand in a terminal is not an unknown agent" "$(unk <<'EOF3'
+100 1 S 0.0 9000 02:00:00 00:01.00 /usr/bin/login -fp me
+101 100 S 0.0 9000 02:00:00 00:01.00 -zsh
+102 101 S 0.0 9000 02:00:00 00:01.00 node /x/some-mcp-server
+EOF3
+)" none
+  chk "MCP servers under a known agent are not an unknown agent" "$(unk <<'EOF3'
+100 1 S 0.0 9000 02:00:00 00:01.00 claude --resume
+101 100 S 0.0 9000 02:00:00 00:01.00 npm exec some-mcp-server@latest
+102 101 S 0.0 9000 02:00:00 00:01.00 node /x/some-mcp-server
+EOF3
+)" "session:claude#1 "
+  chk "a plain program with no MCP servers is not an unknown agent" "$(unk <<'EOF3'
+100 1 S 0.0 9000 02:00:00 00:01.00 node /Users/me/app/server.js
+EOF3
+)" none
+  procs() { printf '%s\n' '100 1 S 0.0 9000 02:00:00 00:01.00 /opt/newagent/bin/newagent --resume'; }
+  INSTANT=0; got=$(YARE_DOCTOR_AGENTS="NewAgent, other" scan | awk -F'\t' '$1 == "SESS" { printf "%s", $2 }'); INSTANT=1
+  chk "YARE_DOCTOR_AGENTS adds an agent by name" "$got" "newagent#1"
   # a capture replayed with --from detects the same agents, and its masking leaves no secret behind
   local capf; capf=$(mktemp)
   printf '%s\n' '10 1 S 0.0 1000 02:00:00 00:00.10 /usr/local/bin/node --max-old-space-size=8192 /Users/me/SECRETPROJ/node_modules/@google/gemini-cli/dist/index.js --token=hunter2' \
@@ -1744,7 +1864,10 @@ EOF2
   chk "an old index.lock is reported" "$(git_locks | cut -f1 | sed "s#^$ltmp##")" "/r/.git/index.lock"
   chk "a fresh lock is not reported" "$(git_locks | wc -l | tr -d ' ')" 1
   git_running() { return 0; }
-  chk "nothing is reported while git is running" "$(git_locks | wc -l | tr -d ' ')" 0
+  chk "an old lock is still reported while git runs elsewhere" "$(git_locks | wc -l | tr -d ' ')" 1
+  : > "$ltmp/r/.git/shallow.lock"; touch -t "$(date -v-5M +%Y%m%d%H%M)" "$ltmp/r/.git/shallow.lock"
+  rm "$ltmp/r/.git/index.lock"
+  chk "a 5-minute-old lock is not reported while git runs, and is when git is idle" "$(git_locks | wc -l | tr -d ' ')$(git_running() { return 1; }; git_locks | wc -l | tr -d ' ')" 01
   git_running() { pgrep -x git >/dev/null 2>&1; }
   find "$ltmp" -depth -delete
   FOLDERS=""
@@ -2129,7 +2252,7 @@ cleanup_mode() {
     $1 == "STUCK" { printf "  %s%s%s kill -9 %-4s %s# %s in %s is %s%s\n", YEL, DOT, RST, $2, DIM, $5, $3, ($4 == "Z" ? "a zombie (its parent has to collect it)" : "suspended; kill -CONT to resume instead"), RST }
     $1 == "DETACH" { printf "  %s%s%s kill %-7s %s# %s at %.0f%% CPU, started by %s: yours? look before closing%s\n", YEL, DOT, RST, $2, DIM, $4, $3, $5, RST }')
   if [ -n "$LOCKS" ]; then
-    local lk; lk=$(echo "$LOCKS" | uawk -F'\t' -v r="$REDACT" "$AWKLIB"'{ printf "  %s%s%s rm %-7s %s# stale git lock, %dm old, no git command is running%s\n", YEL, DOT, RST, (r + 0 ? "<lock file>" : "\"" $1 "\""), DIM, $3 / 60, RST }')
+    local lk; lk=$(echo "$LOCKS" | uawk -F'\t' -v r="$REDACT" "$AWKLIB"'{ printf "  %s%s%s rm %-7s %s# stale git lock, %dm old%s\n", YEL, DOT, RST, (r + 0 ? "<lock file>" : "\"" $1 "\""), DIM, $3 / 60, RST }')
     out="${out:+$out$'\n'}$lk"
   fi
   if [ -n "$out" ]; then echo "$out"; any=1; else printf '  %snothing to check%s\n' "$D" "$X"; fi
@@ -2165,11 +2288,9 @@ prom_mode() {
 }
 
 # ---- --installed: which coding agents are installed on this Mac (nothing is run, only looked for) ----
-installed_mode() {
-  prepare
-  banner "$VERSION $MID installed agents $MID read-only, nothing is run"
-  section "CODING AGENTS FOUND ON THIS MAC" "looked for by name in your PATH and the usual install folders"
-  local dirs d a f found n=0
+# Prints one line per agent found, by name in PATH and the usual install folders: name<TAB>path (or "-")<TAB>sessions running now
+installed_scan() {
+  local dirs d a f found run
   dirs="${PATH//:/ } $HOME/.local/bin $HOME/.claude/local $HOME/.npm-global/bin $HOME/.bun/bin $HOME/.cargo/bin $HOME/.opencode/bin $HOME/.cursor/bin $HOME/.volta/bin $HOME/go/bin /opt/homebrew/bin /usr/local/bin"
   for a in claude codex gemini opencode aider cursor-agent amp goose crush droid qwen kiro-cli copilot hermes auggie cline plandex openhands kimi devin kilo cn grok junie jules; do
     found=""
@@ -2178,18 +2299,26 @@ installed_mode() {
       f="$d/$a"
       if [ -x "$f" ] && [ ! -d "$f" ]; then found="$f"; break; fi
     done
-    local run; run=$(echo "$SCAN" | awk -F'\t' -v a="$a" '$1 == "SESS" { split($2, p, "#"); if (p[1] == a || (a == "cn" && p[1] == "continue")) c++ } END { print c + 0 }')
-    if [ -n "$found" ] || [ "$run" -gt 0 ]; then
-      n=$((n + 1))
-      local where state
-      if [ -n "$found" ]; then where="${found/#$HOME/~}"; else where="(running, not found in PATH)"; fi
-      if [ "$run" -gt 0 ]; then state="$run running now"; else state="installed, not running"; fi
-      printf '  %s%-14s%s %-48s %s\n' "$B" "$a" "$X" "$where" "$state"
-    fi
+    run=$(echo "$SCAN" | awk -F'\t' -v a="$a" '$1 == "SESS" { split($2, p, "#"); if (p[1] == a || (a == "cn" && p[1] == "continue")) c++ } END { print c + 0 }')
+    if [ -n "$found" ] || [ "$run" -gt 0 ]; then printf '%s\t%s\t%s\n' "$a" "${found:--}" "$run"; fi
   done
+}
+
+installed_mode() {
+  prepare
+  banner "$VERSION $MID installed agents $MID read-only, nothing is run"
+  section "CODING AGENTS FOUND ON THIS MAC" "looked for by name in your PATH and the usual install folders"
+  local n=0 a where run state
+  while IFS=$'\t' read -r a where run; do
+    [ -n "$a" ] || continue
+    n=$((n + 1))
+    if [ "$where" = "-" ]; then where="(running, not found in PATH)"; else where="${where/#$HOME/~}"; fi
+    if [ "$run" -gt 0 ]; then state="$run running now"; else state="installed, not running"; fi
+    printf '  %s%-14s%s %-48s %s\n' "$B" "$a" "$X" "$where" "$state"
+  done <<< "$(installed_scan)"
   if (( n == 0 )); then printf '  %sNo coding agent found in PATH or the usual install folders.%s\n' "$D" "$X"; fi
   section "APPS THAT RUN AGENTS" "installed in /Applications or ~/Applications"
-  local app m=0
+  local app m=0 d
   for app in "Claude" "Codex" "ChatGPT" "Cursor" "Windsurf" "Zed" "Conductor" "Warp" "Ghostty" "iTerm" "Visual Studio Code" "T3 Code" "T3 Code (Beta)" "Xcode"; do
     for d in /Applications "$HOME/Applications"; do
       if [ -d "$d/$app.app" ]; then printf '  %s%-20s%s %s\n' "$B" "$app" "$X" "${d/#$HOME/~}/$app.app"; m=$((m + 1)); break; fi
@@ -2267,7 +2396,7 @@ EOF2
 
 # ---- --completions bash|zsh ----
 completions_mode() {
-  local opts="--watch --live --why --oneline --check --card --awards --vibe --tree --cleanup --installed --sessions --notify --html --snippet --rules --prom --share --redact --json --selftest --checksum --no-color --color --version --help --limit-mem --limit-cpu --limit-sessions --completions --capture --from --md --ascii --light --slow --compare --zoo"
+  local opts="watch live tree why cleanup share redact json sessions installed check help --watch --live --why --oneline --check --card --awards --vibe --tree --cleanup --installed --sessions --notify --html --snippet --rules --prom --share --redact --json --selftest --checksum --no-color --color --version --help --limit-mem --limit-cpu --limit-sessions --completions --capture --from --md --ascii --light --slow --compare --zoo"
   case ${COMPL_SHELL:-} in
     bash) printf '_yare_doctor() { COMPREPLY=( $(compgen -W "%s" -- "${COMP_WORDS[COMP_CWORD]}") ); }\ncomplete -F _yare_doctor yare-doctor yare-doctor.sh\n' "$opts" ;;
     zsh) printf '#compdef yare-doctor yare-doctor.sh\n_arguments "*: :(%s)"\n' "$opts" ;;

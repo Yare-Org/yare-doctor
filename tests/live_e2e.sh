@@ -13,7 +13,7 @@ ck() { if [ "$2" = "$3" ]; then echo "  ok    $1"; else echo "  FAIL  $1 (expect
 ck "three fake sessions found"        "$(echo "$J" | grep -o '"label":"\(codex\|gemini\)#1"' | wc -l | tr -d ' ')" 2
 ck "folder and branch shown"          "$(echo "$R" | grep -c 'feature-beta')" 2
 ck "same-folder collision found"      "$(echo "$J" | grep -o '"shared_folders":[0-9]*')" '"shared_folders":1'
-ck "stale git lock found"             "$(echo "$J" | grep -c 'stale git lock')" 1
+ck "stale git lock found (even while editors run git)" "$(echo "$J" | grep -c 'stale git lock')" 1
 ck "held ports counted (3 or more)"   "$(echo "$J" | grep -o '"ports_held":[0-9]*' | cut -d: -f2 | awk '{ print ($1 >= 3) ? "yes" : "no" }')" yes
 ck "--redact hides folders and branches" "$(bash "$S" --redact --no-color | grep -c 'feature-\|/alpha\|/beta')" 0
 for p in 48611 48612 48613; do pid=$(lsof -nP -iTCP:$p -sTCP:LISTEN -t 2>/dev/null); [ -n "$pid" ] && kill "$pid"; done
