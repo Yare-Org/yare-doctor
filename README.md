@@ -27,6 +27,8 @@ bash yare-doctor.sh --tree          # every process each session started, as a t
 bash yare-doctor.sh --why 1234      # who started process 1234? its chain up to the agent session
 bash yare-doctor.sh --cleanup       # what could be closed, with kill commands (printed, never run)
 bash yare-doctor.sh --card          # a small boxed summary with a health score, for screenshots
+bash yare-doctor.sh --html > report.html   # the report as one web page you can open or send
+bash yare-doctor.sh --snippet launchd      # config to paste so it runs on its own (also: cron, tmux, zsh, statusline)
 bash yare-doctor.sh --share         # also prints one line of counts you can paste in a reply
 bash yare-doctor.sh --redact        # hide folder, branch and helper names so the whole report is safe to paste
 bash yare-doctor.sh --json          # machine-readable output (--prom for Prometheus)

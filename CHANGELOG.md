@@ -2,6 +2,12 @@
 
 Versions follow [semver](https://semver.org). The 0.x line means the output format and options can still change.
 
+## 0.3.0 (2026-11-08)
+
+- New `--html`: the whole report as one self-contained web page (light and dark, markup in process names escaped). Print-only: `yare-doctor.sh --html > report.html`. Works with `--redact` and the other views.
+- New `--snippet launchd|cron|tmux|zsh|statusline`: configuration to paste so the doctor runs on its own (a notification every 10 minutes, a tmux status bar, the Claude Code status line). It prints; it installs nothing. The launchd plist passes `plutil -lint`.
+- Self-test: 217 checks.
+
 ## 0.2.1 (2026-11-08)
 
 Five more agents were launched for real (npm and uv installs in throwaway folders, a pseudo-terminal, 7 seconds each) and their actual process lists replayed through the detection: Cline, Jules, Grok (xAI), Junie and OpenHands. That found one more miss:

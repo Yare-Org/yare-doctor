@@ -6,7 +6,7 @@
 #
 # What it does that Activity Monitor does not: it follows the parent chain of every process, so it can say which agent
 # session started what, how much of the Mac each session is holding, who is using the CPU, and what was left behind.
-VERSION="0.2.1"; RELEASED="2026-11-08"
+VERSION="0.3.0"; RELEASED="2026-11-08"
 set -u
 # cron and launchd start scripts with almost no environment: make sure HOME and the system tool folders exist
 if [ -z "${HOME:-}" ]; then HOME=$(dscl . -read "/Users/$(id -un)" NFSHomeDirectory 2>/dev/null | awk '{ print $2 }'); HOME=${HOME:-/var/root}; export HOME; fi
@@ -50,6 +50,8 @@ ${b}AUTOMATION${x}
 ${b}SHARE${x}
   ${b}--share${x}          add one line of counts (no paths, user names or commands) to paste in a reply.
   ${b}--redact${x}         hide folder names, branch names, helper names and leftover commands so the whole report can be pasted.
+  ${b}--html${x}           the report as one self-contained web page (yare-doctor.sh --html > report.html), light and dark.
+  ${b}--snippet${x} KIND   config to paste so the doctor runs on its own: launchd, cron, tmux, zsh or statusline. It prints; it installs nothing.
   ${b}--md${x}             plain text inside a code fence, ready for an issue, chat or post.   ${b}--ascii${x}  no special characters.
   ${b}--light${x}          darker colours for a light terminal background (or set YARE_DOCTOR_THEME=light).
 
@@ -64,7 +66,7 @@ ${d}It never changes anything: no network, no files written, nothing stopped. Re
 EOF
 }
 
-MODE=snapshot; NOTIFY=0; WATCH_SECS=60; SHARE=0; JSON=0; INTERVAL=5; REDACT=0; WHY_PID=; COLOR=auto; TREE_LABEL=; COMPL_SHELL=; WANT_TREE=0; MD=0; ASCII=0; THEME=${YARE_DOCTOR_THEME:-dark}; FROM_FILE=; FIXTURE=0; CMP_A=; CMP_B=; LIMIT_MEM=0; LIMIT_CPU=0; LIMIT_SESS=0
+MODE=snapshot; HTML=0; SNIP=; NOTIFY=0; WATCH_SECS=60; SHARE=0; JSON=0; INTERVAL=5; REDACT=0; WHY_PID=; COLOR=auto; TREE_LABEL=; COMPL_SHELL=; WANT_TREE=0; MD=0; ASCII=0; THEME=${YARE_DOCTOR_THEME:-dark}; FROM_FILE=; FIXTURE=0; CMP_A=; CMP_B=; LIMIT_MEM=0; LIMIT_CPU=0; LIMIT_SESS=0
 while [ $# -gt 0 ]; do
   case $1 in
     --watch) MODE=watch; if [[ ${2:-} =~ ^[0-9]+$ ]]; then WATCH_SECS=$2; shift; fi ;;
@@ -77,6 +79,8 @@ while [ $# -gt 0 ]; do
     --card) MODE=card ;;
     --installed) MODE=installed ;;
     --notify) NOTIFY=1 ;;
+    --html) HTML=1; COLOR=0; ASCII=0 ;;
+    --snippet) MODE=snippet; SNIP=${2:-}; if [ $# -ge 2 ]; then shift; fi ;;
     --sessions) MODE=sessions ;;
     --zoo) MODE=zoo ;;
     --slow) MODE=slow ;;
@@ -1688,6 +1692,12 @@ EOF2
   printf '%s\n' '10 1 S 0.5 90000 05:00:00 0:30.00 /Applications/iTerm.app/Contents/MacOS/iTerm2' '100 10 S 1.0 100000 02:00:00 0:10.00 claude --resume' '101 100 S 0.0 9000 01:30:00 0:00.10 node /x/mcp-server.js' > "$cap"
   local one2; one2=$(mktemp); printf '4001 1 S 0.0 9000 02:00:00 00:01.00 /Users/me/.local/bin/claude --resume\n' > "$one2"
   chk "--json lists each session with its agent and pid" "$(bash "${BASH_SOURCE[0]}" --from "$one2" --json 2>/dev/null | grep -o '"agent":"claude","pid":4001')" '"agent":"claude","pid":4001'
+  local mk; mk=$(mktemp); printf '%s\n' '5000 1 S 0.0 9000 02:00:00 00:01.00 claude --resume' '5001 5000 S 0.0 9000 02:00:00 00:01.00 <b>hello&amp;' > "$mk"
+  chk "--html escapes markup in process names" "$(bash "${BASH_SOURCE[0]}" --from "$mk" --html --tree 2>/dev/null | grep -c '&lt;b&gt;hello&amp;amp;')" 1
+  rm -f "$mk"
+  chk "--html is a complete page" "$(bash "${BASH_SOURCE[0]}" --from "$one2" --html 2>/dev/null | grep -c '</html>')" 1
+  chk "--snippet launchd prints a plist" "$(bash "${BASH_SOURCE[0]}" --snippet launchd 2>/dev/null | grep -c '<key>StartInterval</key>')" 1
+  chk "--snippet with an unknown kind fails" "$(bash "${BASH_SOURCE[0]}" --snippet nope >/dev/null 2>&1; echo $?)" 2
   chk "--sessions shows only the sessions table" "$(bash "${BASH_SOURCE[0]}" --from "$one2" --sessions --no-color 2>/dev/null | grep -c 'claude#1')" 1
   chk "--installed runs and never launches an agent" "$(bash "${BASH_SOURCE[0]}" --from "$one2" --installed --no-color 2>&1 | grep -c 'CODING AGENTS FOUND')" 1
   rm -f "$one2"
@@ -2191,9 +2201,68 @@ sessions_mode() {
   sessions_table
 }
 
+# ---- --snippet launchd|cron|tmux|zsh|statusline: config you can paste to run the doctor automatically (printed, nothing is installed) ----
+snippet_mode() {
+  local me; me=$(command -v yare-doctor 2>/dev/null || true)
+  [ -n "$me" ] || me="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)/$(basename "${BASH_SOURCE[0]:-$0}")"
+  case ${SNIP:-} in
+    launchd) cat <<EOF2
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.yare.doctor</string>
+  <key>ProgramArguments</key><array><string>/bin/bash</string><string>$me</string><string>--check</string><string>--notify</string></array>
+  <key>StartInterval</key><integer>600</integer>
+  <key>RunAtLoad</key><false/>
+</dict></plist>
+<!-- Save everything above as ~/Library/LaunchAgents/com.yare.doctor.plist and run:
+       launchctl load ~/Library/LaunchAgents/com.yare.doctor.plist
+     Every 10 minutes it shows a macOS notification when something needs a look. Remove it with launchctl unload (same file). -->
+EOF2
+    ;;
+    cron) printf '# crontab -e   (cron cannot show notifications; use launchd for those). Writes one line to a log every 10 minutes:
+*/10 * * * * /bin/bash %s --oneline >> $HOME/yare-doctor.log 2>&1
+' "$me" ;;
+    tmux) printf '# ~/.tmux.conf: the one-line status on the right of the tmux bar, refreshed every 15 seconds
+set -g status-interval 15
+set -g status-right "#(/bin/bash %s --oneline) %%H:%%M"
+' "$me" ;;
+    zsh) printf '# ~/.zshrc: a command that prints the one-line status when you want it (about a second per call, so not in your prompt)
+agents() { /bin/bash %s --oneline; }
+alias doctor="/bin/bash %s"
+' "$me" "$me" ;;
+    statusline) printf '# ~/.claude/settings.json: the Claude Code status line shows the one-line status
+{
+  "statusLine": { "type": "command", "command": "/bin/bash %s --oneline" }
+}
+' "$me" ;;
+    *) echo "usage: yare-doctor.sh --snippet launchd|cron|tmux|zsh|statusline   (prints configuration to paste; installs nothing)" >&2; return 2 ;;
+  esac
+}
+
+# ---- --html: the report as one self-contained web page (redirect it to a file; it is printed, not saved) ----
+html_wrap() {
+  local body; body=$(sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')
+  cat <<EOF2
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>yare-doctor report</title>
+<style>
+:root { --bg:#fbfbfa; --fg:#1d1f24; --dim:#6b7280; }
+@media (prefers-color-scheme: dark) { :root { --bg:#0f1117; --fg:#e6e8ee; --dim:#8b93a5; } }
+body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace; }
+main { max-width:110ch; margin:0 auto; padding:24px 16px; }
+pre { white-space:pre-wrap; word-break:break-word; margin:0; }
+footer { color:var(--dim); margin-top:16px; font-size:12px; }
+</style></head><body><main><pre>
+$body
+</pre><footer>Made with yare-doctor $VERSION, a read-only script: https://github.com/Yare-Org/yare-doctor</footer></main></body></html>
+EOF2
+}
+
 # ---- --completions bash|zsh ----
 completions_mode() {
-  local opts="--watch --live --why --oneline --check --card --awards --vibe --tree --cleanup --installed --sessions --notify --rules --prom --share --redact --json --selftest --checksum --no-color --color --version --help --limit-mem --limit-cpu --limit-sessions --completions --capture --from --md --ascii --light --slow --compare --zoo"
+  local opts="--watch --live --why --oneline --check --card --awards --vibe --tree --cleanup --installed --sessions --notify --html --snippet --rules --prom --share --redact --json --selftest --checksum --no-color --color --version --help --limit-mem --limit-cpu --limit-sessions --completions --capture --from --md --ascii --light --slow --compare --zoo"
   case ${COMPL_SHELL:-} in
     bash) printf '_yare_doctor() { COMPREPLY=( $(compgen -W "%s" -- "${COMP_WORDS[COMP_CWORD]}") ); }\ncomplete -F _yare_doctor yare-doctor yare-doctor.sh\n' "$opts" ;;
     zsh) printf '#compdef yare-doctor yare-doctor.sh\n_arguments "*: :(%s)"\n' "$opts" ;;
@@ -2207,9 +2276,10 @@ run_mode() {
   case $MODE in
     watch) watch_mode ;; selftest) selftest ;; live) live ;; why) why ;; checksum) checksum ;; oneline) oneline ;;
     check) check ;; card) card ;; awards) awards ;; vibe) vibe_mode ;; cleanup) cleanup_mode ;; rules) rules_mode ;;
-    prom) prom_mode ;; zoo) zoo_mode ;; slow) slow_mode ;; compare) compare_mode ;; capture) capture_mode ;; tree) tree_mode ;; completions) completions_mode ;; installed) installed_mode ;; sessions) sessions_mode ;; *) snapshot ;;
+    prom) prom_mode ;; zoo) zoo_mode ;; slow) slow_mode ;; compare) compare_mode ;; capture) capture_mode ;; tree) tree_mode ;; completions) completions_mode ;; snippet) snippet_mode ;; installed) installed_mode ;; sessions) sessions_mode ;; *) snapshot ;;
   esac
 }
 if (( MD )) && (( ! JSON )); then echo '```'; run_mode; rc=$?; echo '```'; exit "$rc"; fi
+if (( HTML )) && (( ! JSON )); then run_mode 2>&1 | html_wrap; exit "${PIPESTATUS[0]}"; fi
 run_mode
 exit $?
