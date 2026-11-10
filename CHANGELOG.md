@@ -2,6 +2,14 @@
 
 Versions follow [semver](https://semver.org). The 0.x line means the output format and options can still change.
 
+## 0.1.1 (2026-11-10)
+
+A redesigned tabbed screen (what plain `yare-doctor` opens in a terminal). Nothing else changed: detection, the plain report and the JSON output are as in 0.1.0.
+
+- The title and the tab bar can no longer scroll off the screen: every row is placed by its row number and line wrapping is off, so a long line is cut at the edge instead of pushing the bar away. The terminal size is re-read every second. The bar fits 80 columns.
+- The Overview reads top to bottom: a one-line summary, this Mac's gauges, your agents (top 4), then the top findings. Sessions, Processes, Activity, Findings, Agents and Help are shorter, one idea per row.
+- Colour: an icon and colour per gauge row, a colour per tab (the active tab is a block of its own colour), a gradient title and coloured section bars.
+
 ## 0.1.0 (2026-11-08)
 
 First public release.
@@ -14,10 +22,6 @@ First public release.
 - Processes that look like a coding agent the doctor does not know (they start MCP servers, or run with agent-style flags) are listed; `YARE_DOCTOR_AGENTS=name` adds one by program name.
 - Sessions are numbered oldest first, so labels stay put. The host is found from the app, tmux or ssh (19 terminals and editors tested).
 - All 25 agents were launched for real on one Apple Silicon Mac (Hermes and the Claude desktop app were seen live) and their actual process lists are in `--selftest`.
-
-**The tabbed screen** (what plain `yare-doctor` opens in a terminal)
-- Eight tabs (Overview, Sessions, Processes, Activity, Findings, Tree, Agents, Help), clickable or with the arrow keys. Every row is placed by its row number and line wrapping is off, so the title and tab bar can never scroll off the screen, whatever the terminal size. It fits 80 columns.
-- The Overview reads top to bottom: a one-line summary, this Mac's gauges, your agents, then the top findings.
 
 **What it shows**
 - Per session: folder, git branch (read from `.git/HEAD`, no git run), MCP servers, network bytes, program version, what it is running now.
