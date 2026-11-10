@@ -977,13 +977,17 @@ section() {
     "WHO IS USING THE CPU") t=$CO ;;
     "WHO HOLDS THE MOST MEMORY"|"MEMORY BY PROGRAM") t=$CP ;;
     "BUILDS AND TESTS"|RESULT|TOOLS|PARSER|"THIS MAC") t=$G ;;
-    "THE SAME HELPER STARTED MANY TIMES"|"WHAT KEEPS THIS MAC AWAKE"|"POSSIBLE LEFTOVERS") t=$Y ;;
+    "THE SAME HELPER STARTED MANY TIMES"|"WHAT KEEPS THIS MAC AWAKE"|"POSSIBLE LEFTOVERS"|"BACKGROUND SERVICES"|KEYS) t=$Y ;;
+    "YOUR AGENTS"|"CODING AGENTS ON THIS MAC") t=$CM ;;
+    "USING THE CPU") t=$CO ;;
+    "ALL FINDINGS") t=$R ;;
+    "PROCESS TREE"|"APPS THAT RUN AGENTS"|MORE) t=$CB ;;
     *) t=$C ;;
   esac
   if [ "${TABMODE:-0}" = 1 ]; then
-    local fill rl; fill=$(( ${COLS:-80} - 6 - ${#1} )); (( fill < 3 )) && fill=3
+    local fill rl; fill=$(( ${COLS:-80} - 5 - ${#1} )); (( fill < 3 )) && fill=3
     rl=$(printf '%*s' "$fill" ''); rl=${rl// /$RUL}
-    printf '\n  %s%s%s%s %s%s%s\n' "$t" "$B" "$1" "$X" "$D" "$rl" "$X"
+    printf '\n%s%s%s %s%s%s%s %s%s%s\n' "$t" "$ACC" "$X" "$t" "$B" "$1" "$X" "$D" "$rl" "$X"
     return
   fi
   printf '\n%s%s%s %s%s%s%s' "$t" "$ACC" "$X" "$B" "$t" "$1" "$X"
@@ -2513,22 +2517,22 @@ dash_tab() {
   swmb=$(echo "${SWAP:-0M}" | awk '/G/ { v = $1; sub(/G/, "", v); print v * 1024; next } { v = $1; sub(/M/, "", v); print v + 0 }')
   uawk -v cpus="$CORES" -v load="${LOAD:-0}" -v inuse="$(awk -v a="${ALL_CPU:-0}" -v c="$CORES" 'BEGIN { printf "%.1f", a / c }')" -v used="$used" -v unp="$UN_PCT" -v ns="$SESS_N" -v chipname="$chip" -v ver="$ver" -v mem="$MEM_GB" \
     -v swap="$(fmt_size "${SWAP:-0M}")" -v swmb="$swmb" -v agmem="$(fmt_size "${AG_MB}M")" -v pw="$pw" -v onbat="$onbat" -v batt="${BATT:-}" -v en="$en" -v disk="${DISK:-?}" -v gpu="${GPU:-}" "$AWKLIB"'
-  function lbl(name, col) { return col BLD pad(name, 8) RST }
-  function row(name, col, f, val, l, a, b, c, extra) {
-    print "  " lbl(name, col) (f >= 0 ? gbar(f, 12) : sprintf("%12s", "")) "  " lcol(l) BLD rp(val, 6) RST "  " chip(l, a, b, c) (extra != "" ? "  " DIM extra RST : "")
+  function lbl(i, name, col,   a) { split(ICONS, a, " "); return col a[i] RST " " col BLD pad(name, 8) RST }
+  function row(i, name, col, f, val, l, a, b, c, extra) {
+    print "  " lbl(i, name, col) (f >= 0 ? gbar(f, 12) : sprintf("%12s", "")) "  " lcol(l) BLD rp(val, 6) RST "  " chip(l, a, b, c) (extra != "" ? "  " DIM extra RST : "")
   }
   BEGIN {
     sep = DIM " " MID " " RST
-    print "  " lbl("Mac", BLU) BLD chipname RST sep cpus " cores" sep mem " GB" sep ver
+    print "  " lbl(1, "Mac", BLU) BLD chipname RST sep ORG cpus " cores" RST sep PNK mem " GB" RST sep BLU ver RST
     pct = inuse + 0; if (pct > 100) pct = 100
-    row("CPU", ORG, pct / 100, sprintf("%.0f%%", pct), lvl(pct, 70, 90), "calm", "busy", "overloaded", "load " sprintf("%.1f", load))
+    row(2, "CPU", ORG, pct / 100, sprintf("%.0f%%", pct), lvl(pct, 70, 90), "calm", "busy", "overloaded", "load " sprintf("%.1f", load))
     ml = lvl(used, 80, 90); sl = lvl(swmb, 2048, 8192); if (used < 70) sl = 0; l = (sl > ml) ? sl : ml
-    row("Memory", PNK, used / 100, used "%", l, "fine", "tight", "short", (swmb + 0 > 0 ? swap " swap" : ""))
-    if (gpu != "" && gpu + 0 >= 70) row("GPU", CYA, gpu / 100, gpu "%", lvl(gpu, 70, 90), "fine", "busy", "maxed", "")
+    row(3, "Memory", PNK, used / 100, used "%", l, "fine", "tight", "short", (swmb + 0 > 0 ? swap " swap" : ""))
+    if (gpu != "" && gpu + 0 >= 70) row(4, "GPU", CYA, gpu / 100, gpu "%", lvl(gpu, 70, 90), "fine", "busy", "maxed", "")
     l = (disk != "?") ? ((disk + 0 < 10) ? 2 : (disk + 0 < 25) ? 1 : 0) : 0
-    row("Disk", BLU, -1, disk " GB", l, "roomy", "getting full", "almost full", "free")
-    if (onbat) { bl = (batt + 0 < 20) ? 2 : (batt + 0 < 40) ? 1 : 0; row("Power", YEL, -1, batt "%", bl, "on battery", "on battery", "low battery", en) }
-    else row("Power", YEL, -1, "", 0, "plugged in", "", "", en)
+    row(7, "Disk", BLU, -1, disk " GB", l, "roomy", "getting full", "almost full", "free")
+    if (onbat) { bl = (batt + 0 < 20) ? 2 : (batt + 0 < 40) ? 1 : 0; row(6, "Power", YEL, -1, batt "%", bl, "on battery", "on battery", "low battery", en) }
+    else row(6, "Power", YEL, -1, "", 0, "plugged in", "", "", en)
   }'
 }
 # the top findings, one line each: the first sentence, cut to fit
@@ -2666,16 +2670,18 @@ tabs_draw() {
   h=$((TROWS - 4))
   total=${TAB_N[$TAB_CUR]}; maxs=$((total - h)); (( maxs < 0 )) && maxs=0
   (( TAB_SCROLL > maxs )) && TAB_SCROLL=$maxs; (( TAB_SCROLL < 0 )) && TAB_SCROLL=0
-  if (( P256 )); then act=$'\033[1;38;5;16;48;5;81m'; inact=$'\033[38;5;252m'; foot=$'\033[38;5;245m'; else act=$'\033[1;30;46m'; inact=$'\033[37m'; foot=$'\033[2m'; fi
+  local tc=(81 141 213 215 203 114 75 186) tf=(36 35 35 33 31 32 34 33)
+  if (( P256 )); then foot=$'\033[38;5;245m'; else foot=$'\033[2m'; fi
   case ${HGRADE:-A} in A|B) hc=$'\033[1;32m' ;; C) hc=$'\033[1;33m' ;; *) hc=$'\033[1;31m' ;; esac
   # every row is placed by its row number and line wrapping is off, so nothing can push the title and the tab bar off the screen
   left="  yare-doctor ${VERSION}"; right="health ${HSCORE:-100}/100 ${HGRADE:-A}  "
   gap=$(( TCOLS - ${#left} - ${#right} )); (( gap < 1 )) && gap=1
-  out=$'\033[1;1H'"  ${B}yare-doctor${X} ${D}${VERSION}${X}$(printf '%*s' "$gap" '')${D}health${X} ${hc}${HSCORE:-100}/100 ${HGRADE:-A}${X}  "$'\033[K'
+  out=$'\033[1;1H'"  ${TAB_BRAND:-${B}yare-doctor${X}} ${D}${VERSION}${X}$(printf '%*s' "$gap" '')${D}health${X} ${hc}${HSCORE:-100}/100 ${HGRADE:-A}${X}  "$'\033[K'
   out="$out"$'\033[2;1H  '; x=3
   for i in 0 1 2 3 4 5 6 7; do
     vis=" ${TAB_NAMES[$i]}${TAB_BADGE[$i]:-} "
     TAB_X0[$i]=$x; TAB_X1[$i]=$((x + ${#vis} - 1))
+    if (( P256 )); then act=$'\033[1;38;5;16;48;5;'"${tc[$i]}m"; inact=$'\033[38;5;'"${tc[$i]}m"; else act=$'\033[1;30;4'"${tf[$i]: -1}m"; inact=$'\033['"${tf[$i]}m"; fi
     if (( i == TAB_CUR )); then out="$out$act$vis"$'\033[0m'
     elif [ -n "${TAB_BCOL[$i]:-}" ]; then out="$out${TAB_BCOL[$i]}$vis"$'\033[0m'
     else out="$out$inact$vis"$'\033[0m'; fi
@@ -2749,6 +2755,7 @@ tabs_mode() {
   printf '\033[?1049h\033[?25l\033[?7l\033[?1000h\033[?1006h\033[2J\033[H'
   TABMODE=1
   COLUMNS=$TCOLS; setup_ui
+  TAB_BRAND=$(uawk "$AWKLIB"'BEGIN { s = "yare-doctor"; n = split(BAN, a, " "); for (i = 1; i <= length(s); i++) printf "%s%s%s", c256(a[int((i - 1) * n / length(s)) + 1], 36), BLD, substr(s, i, 1); printf "%s", RST }')
   printf '\033[H  %sReading the process list...%s\033[J' "$D" "$X"
   prepare; tabs_render; TAB_STAMP=$(date +%H:%M:%S); TAB_LAST=$(date +%s)
   while true; do
