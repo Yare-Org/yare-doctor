@@ -43,6 +43,13 @@ class Term:
         t = self.text(); i = max(t.rfind('\x1b[H'), t.rfind('\x1b[1;1H')); t = t[i:] if i >= 0 else t
         t = re.sub(r'\x1b\[\d+;1H', '\n', t)  # every row is placed by its row number: one row per line
         return re.sub(r'\x1b\[[0-9;?<]*[A-Za-z]', '', t).lstrip('\n')
+    def until(self, cond, timeout=10):
+        # a loaded CI runner can be slow to redraw: wait for the condition instead of for a fixed time
+        end = time.time() + timeout
+        while time.time() < end:
+            if cond(self.frame()): return True
+            self.pump(0.4)
+        return cond(self.frame())
     def resize(self, rows, cols):
         fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0)); os.kill(self.pid, signal.SIGWINCH)
     def finish(self):
@@ -74,8 +81,8 @@ check('clicking another tab opens it', 'AGENT SESSIONS' not in fr and len(fr) > 
 t.send(b'\x1b[<0;17;10M\x1b[<0;17;10m'); check('clicking below the tab bar does nothing', len(t.text()) < 400 or 'AGENT SESSIONS' not in t.frame())
 t.send(b'\x1b[<65;40;10M'); t.send(b'\x1b[<64;40;10M'); check('mouse wheel scrolls without crashing', True)
 t.send(b'1'); t.send(b'r', wait=4); check('r refreshes and still shows the Overview', 'WHAT STANDS OUT' in t.frame())
-t.send(b'a'); check('a turns auto-refresh on', 'auto-refresh on' in t.frame())
-t.send(b'a'); check('a turns it off again', 'auto-refresh on' not in t.frame())
+t.send(b'a'); check('a turns auto-refresh on', t.until(lambda f: 'auto-refresh on' in f))
+t.send(b'a'); check('a turns it off again', t.until(lambda f: 'auto-refresh on' not in f))
 t.resize(40, 120); t.pump(3)
 check('resizing redraws at the new width', len(re.findall(r'─+', t.frame())) > 0 and max(len(x) for x in re.findall(r'─+', t.frame())) > 100)
 t.send(b'q', wait=1.5)
