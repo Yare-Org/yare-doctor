@@ -980,6 +980,12 @@ section() {
     "THE SAME HELPER STARTED MANY TIMES"|"WHAT KEEPS THIS MAC AWAKE"|"POSSIBLE LEFTOVERS") t=$Y ;;
     *) t=$C ;;
   esac
+  if [ "${TABMODE:-0}" = 1 ]; then
+    local fill rl; fill=$(( ${COLS:-80} - 6 - ${#1} )); (( fill < 3 )) && fill=3
+    rl=$(printf '%*s' "$fill" ''); rl=${rl// /$RUL}
+    printf '\n  %s%s%s%s %s%s%s\n' "$t" "$B" "$1" "$X" "$D" "$rl" "$X"
+    return
+  fi
   printf '\n%s%s%s %s%s%s%s' "$t" "$ACC" "$X" "$B" "$t" "$1" "$X"
   if [ -n "${2:-}" ]; then printf '  %s%s%s' "$D" "$2" "$X"; fi
   printf '\n'
@@ -1001,11 +1007,12 @@ verdict() {
 
 print_notes() {
   local lv max=${1:-999}
-  for lv in 1 2 3 4; do printf '%s' "$NOTES" | awk -F'\t' -v l="$lv" '$1 == l'; done | uawk -F'\t' -v max="$max" "$AWKLIB"'
+  for lv in 1 2 3 4; do printf '%s' "$NOTES" | awk -F'\t' -v l="$lv" '$1 == l'; done | uawk -F'\t' -v max="$max" -v sp="${2:-0}" "$AWKLIB"'
     { if (++cnt > max) next
       k = ($1 == 1) ? "r" : ($1 == 2) ? "y" : ($1 == 3) ? "c" : "g"; t = ($1 == 1) ? "ACT " : ($1 == 2) ? "LOOK" : ($1 == 3) ? "INFO" : " OK "
       n = split(wrap($2, W - 12, "       "), L, "\n")
-      for (i = 1; i <= n; i++) printf "  %s%s\n", (i == 1 ? pill(k, t) " " : ""), paint(L[i]) }'
+      for (i = 1; i <= n; i++) printf "  %s%s\n", (i == 1 ? pill(k, t) " " : ""), paint(L[i])
+      if (sp + 0) print "" }'
 }
 
 # ---- the machine at a glance ----
@@ -1097,13 +1104,17 @@ cpu_table() {
   echo "$top" | uawk -F'\t' "$AWKLIB"'
     { name[NR] = $6; cpu[NR] = $4; mem[NR] = $5; own[NR] = $3; if ($4 > mx) mx = $4 }
     END {
-      NW = (W >= 104 ? 40 : 30)
+      NW = (W >= 104 ? 40 : W - 48)
       print "  " DIM "  " pad("PROCESS", NW) "  " pad("", 8) " " rp("CPU", 7) " " rp("MEMORY", 9) "  " "STARTED BY" RST
       for (i = 1; i <= NR; i++) {
         a = (own[i] != "-")
         print "  " (a ? scol(own[i]) DOT : DIM "○") RST " " (a ? scol(own[i]) : "") pad(name[i], NW) RST "  " heat(cpu[i], 100, 250) bar(cpu[i] / mx, 8) RST " " heat(cpu[i], 100, 250) rp(sprintf("%.1f%%", cpu[i]), 7) RST " " heat(mem[i], 2000, 6000) rp(mb(mem[i]), 9) RST "  " (a ? scol(own[i]) BLD own[i] RST : DIM "not an agent" RST)
       }
     }'
+  if [ "${TABMODE:-0}" = 1 ]; then
+    awk -v a="$AG_CPU" -v t="$ALL_CPU" -v c="$CORES" -v d="$D" -v x="$X" -v b="$B" 'BEGIN { g = a / c; o = (t - a) / c; if (o < 0) o = 0; printf "  %sAgents use %s%.1f%%%s of the Mac, everything else %s%.0f%%%s%s\n", d, b, g, x d, b, o, x d, x }'
+    return
+  fi
   printf '  %sAgent processes: %s%s%s. Everything else: %s%s%s.%s\n' "$D" "$X$B$G" "$(cpu_txt "$AG_CPU")" "$X$D" "$X$B$Y" "$(cpu_txt "$(awk -v a="$ALL_CPU" -v g="$AG_CPU" 'BEGIN { v = a - g; if (v < 0) v = 0; print v }')")" "$X$D" "$X"
 }
 
@@ -1150,7 +1161,7 @@ sec_groups() {
   if [ -n "$gt" ]; then
     section "MEMORY BY PROGRAM" "the same program counted together, so many small processes show up"
     echo "$gt" | uawk -F'\t' "$AWKLIB"'{ nm[NR] = $2; cnt[NR] = $3; mem[NR] = $4; cpu[NR] = $5; ag[NR] = $6; if ($4 > mx) mx = $4 }
-      END { printf "  %s%-30s  %-8s %6s %9s  %s%s\n", DIM, "PROGRAM", "", "COUNT", "MEMORY", "INSIDE AGENT SESSIONS", RST
+      END { printf "  %s%-30s  %-8s %6s %9s  %s%s\n", DIM, "PROGRAM", "", "COUNT", "MEMORY", "IN AGENTS", RST
         for (i = 1; i <= NR; i++) printf "  %s%-30s%s  %s%s%s %6d %s%9s%s  %s\n", (ag[i] > 0 ? BLD : ""), pad(nm[i], 30), RST, heat(mem[i], 2000, 6000), bar(mem[i] / mx, 8), RST, cnt[i], heat(mem[i], 2000, 6000), mb(mem[i]), RST, (ag[i] > 0 ? MAG BLD ag[i] " of " cnt[i] RST : DIM "none" RST) }'
   fi
 }
@@ -1186,8 +1197,8 @@ sec_awake() {
 sec_left() {
   if (( LEFT_N > 0 )); then
     section "POSSIBLE LEFTOVERS" "no parent, alive over 30 minutes: may be from sessions that ended"
-    echo "$SCAN" | uawk -F'\t' "$AWKLIB"'$1 == "LEFT" { if (!h++) printf "  %s%8s %6s %9s %-10s %s%s\n", DIM, "PID", "CPU", "MEMORY", "RUNNING", "COMMAND", RST; printf "  %8s %5s%% %9s %-10s %s\n", $2, $3, mb($4), $5, $6 }'
-    printf '  %sCheck before closing any of them. To close one yourself: kill PID. This script never does.%s\n' "$D" "$X"
+    echo "$SCAN" | uawk -F'\t' "$AWKLIB"'$1 == "LEFT" { if (!h++) printf "  %s%8s %6s %9s %-10s %s%s\n", DIM, "PID", "CPU", "MEMORY", "RUNNING", "COMMAND", RST; printf "  %8s %5s%% %9s %-10s %s\n", $2, $3, mb($4), $5, fit($6, W - 44) }'
+    printf '  %sCheck before closing any. To close one: kill PID. This script never does.%s\n' "$D" "$X"
   fi
 }
 
@@ -2277,7 +2288,7 @@ tree_body() {
     }
     function show(pid, prefix, last, depth,   kids, n, i, line, c, g, k, j, same, tot) {
       line = pname[pid]; if (redact + 0) { sub(/ .*/, "", line) }
-      printf "  %s%s%s%s%s%s%-46s%s %s%5.1f%%%s %s%8s%s %s%s%s\n", DIM, prefix, (depth ? (last ? "└─ " : "├─ ") : ""), RST, "", BLD, fit(line, 46), RST, heat(pcpu[pid], 50, 100), pcpu[pid], RST, heat(pmem[pid], 1500, 4000), mb(pmem[pid]), RST, DIM, page[pid], RST
+      printf "  %s%s%s%s%s%s%-38s%s %s%5.1f%%%s %s%8s%s %s%s%s\n", DIM, prefix, (depth ? (last ? "└─ " : "├─ ") : ""), RST, "", BLD, fit(line, 38), RST, heat(pcpu[pid], 50, 100), pcpu[pid], RST, heat(pmem[pid], 1500, 4000), mb(pmem[pid]), RST, DIM, page[pid], RST
       n = sorted(pid, kids)
       for (i = 1; i <= n; i++) {
         k = kids[i]
@@ -2287,7 +2298,7 @@ tree_body() {
           for (j = 1; j <= n; j++) if (pname[kids[j]] == pname[k] && !(byparent[kids[j]] ~ /[0-9]/)) { same++; tot += pmem[kids[j]] }
           if (same >= 3) {
             for (j = 1; j <= n; j++) if (pname[kids[j]] == pname[k] && !(byparent[kids[j]] ~ /[0-9]/)) done[kids[j]] = 1
-            printf "  %s%s%s%s %s%-46s%s %s%6s%s %s%8s%s\n", DIM, prefix (depth ? (last ? "   " : "│  ") : ""), "├─ ", RST, BLD, fit(sprintf("%s  x%d", pname[k], same), 46), RST, "", "", RST, DIM, mb(tot), RST
+            printf "  %s%s%s%s %s%-38s%s %s%6s%s %s%8s%s\n", DIM, prefix (depth ? (last ? "   " : "│  ") : ""), "├─ ", RST, BLD, fit(sprintf("%s  x%d", pname[k], same), 38), RST, "", "", RST, DIM, mb(tot), RST
             continue
           }
         }
@@ -2478,68 +2489,164 @@ sec_unknown() {
   echo "$SCAN" | uawk -F'\t' "$AWKLIB"'$1 == "UNK" { print "  " MAG DOT RST " " BLD pad($2, 22) RST "  " DIM "pid " $3 ", open " $4 RST }'
   tab_para "Run YARE_DOCTOR_AGENTS=NAME yare-doctor to include one, and send the output of: yare-doctor capture"
 }
+# Tab screens: short lines, one idea per row, nothing wider than the terminal. The full tables are in `yare-doctor plain`.
+verdict_tab() {
+  local n1 n2 n3
+  n1=$(printf '%s' "$NOTES" | awk -F'\t' '$1 == 1' | wc -l | tr -d ' ')
+  n2=$(printf '%s' "$NOTES" | awk -F'\t' '$1 == 2' | wc -l | tr -d ' ')
+  n3=$(printf '%s' "$NOTES" | awk -F'\t' '$1 == 3' | wc -l | tr -d ' ')
+  uawk -v a="$n1" -v l="$n2" -v g="$n3" "$AWKLIB"'BEGIN {
+    p = (a > 0) ? pill("r", "ACT ON IT") : (l > 0) ? pill("y", "WORTH A LOOK") : pill("g", "ALL CLEAR")
+    sep = "  " DIM MID RST "  "; s = ""
+    if (a > 0) s = RED BLD a " to act on" RST
+    if (l > 0) s = s (s != "" ? sep : "") YEL BLD l " to look at" RST
+    if (g > 0) s = s (s != "" ? sep : "") CYA g " good to know" RST
+    if (s == "") s = DIM "nothing to report" RST
+    print "  " p "  " s }'
+}
+dash_tab() {
+  local ver chip used en swmb onbat=0 pw
+  ver=${OSINFO%%,*}; chip=${OSINFO#*, }
+  used=$(( 100 - ${FREE:-100} ))
+  case $ENERGY in low) en="low power mode" ;; high) en="high power mode" ;; *) en="" ;; esac
+  if [ "${PSRC:-}" = battery ]; then pw="on battery"; onbat=1; else pw="plugged in"; fi
+  swmb=$(echo "${SWAP:-0M}" | awk '/G/ { v = $1; sub(/G/, "", v); print v * 1024; next } { v = $1; sub(/M/, "", v); print v + 0 }')
+  uawk -v cpus="$CORES" -v load="${LOAD:-0}" -v inuse="$(awk -v a="${ALL_CPU:-0}" -v c="$CORES" 'BEGIN { printf "%.1f", a / c }')" -v used="$used" -v unp="$UN_PCT" -v ns="$SESS_N" -v chipname="$chip" -v ver="$ver" -v mem="$MEM_GB" \
+    -v swap="$(fmt_size "${SWAP:-0M}")" -v swmb="$swmb" -v agmem="$(fmt_size "${AG_MB}M")" -v pw="$pw" -v onbat="$onbat" -v batt="${BATT:-}" -v en="$en" -v disk="${DISK:-?}" -v gpu="${GPU:-}" "$AWKLIB"'
+  function lbl(name, col) { return col BLD pad(name, 8) RST }
+  function row(name, col, f, val, l, a, b, c, extra) {
+    print "  " lbl(name, col) (f >= 0 ? gbar(f, 12) : sprintf("%12s", "")) "  " lcol(l) BLD rp(val, 6) RST "  " chip(l, a, b, c) (extra != "" ? "  " DIM extra RST : "")
+  }
+  BEGIN {
+    sep = DIM " " MID " " RST
+    print "  " lbl("Mac", BLU) BLD chipname RST sep cpus " cores" sep mem " GB" sep ver
+    pct = inuse + 0; if (pct > 100) pct = 100
+    row("CPU", ORG, pct / 100, sprintf("%.0f%%", pct), lvl(pct, 70, 90), "calm", "busy", "overloaded", "load " sprintf("%.1f", load))
+    ml = lvl(used, 80, 90); sl = lvl(swmb, 2048, 8192); if (used < 70) sl = 0; l = (sl > ml) ? sl : ml
+    row("Memory", PNK, used / 100, used "%", l, "fine", "tight", "short", (swmb + 0 > 0 ? swap " swap" : ""))
+    if (gpu != "" && gpu + 0 >= 70) row("GPU", CYA, gpu / 100, gpu "%", lvl(gpu, 70, 90), "fine", "busy", "maxed", "")
+    l = (disk != "?") ? ((disk + 0 < 10) ? 2 : (disk + 0 < 25) ? 1 : 0) : 0
+    row("Disk", BLU, -1, disk " GB", l, "roomy", "getting full", "almost full", "free")
+    if (onbat) { bl = (batt + 0 < 20) ? 2 : (batt + 0 < 40) ? 1 : 0; row("Power", YEL, -1, batt "%", bl, "on battery", "on battery", "low battery", en) }
+    else row("Power", YEL, -1, "", 0, "plugged in", "", "", en)
+  }'
+}
+# the top findings, one line each: the first sentence, cut to fit
+print_notes_short() {
+  local lv
+  for lv in 1 2 3 4; do printf '%s' "$NOTES" | awk -F'\t' -v l="$lv" '$1 == l'; done | uawk -F'\t' -v max="${1:-3}" "$AWKLIB"'
+    { if (++cnt > max) next
+      k = ($1 == 1) ? "r" : ($1 == 2) ? "y" : ($1 == 3) ? "c" : "g"; t = ($1 == 1) ? "ACT " : ($1 == 2) ? "LOOK" : ($1 == 3) ? "INFO" : " OK "
+      s = $2; p = index(s, ". "); if (p > 0) s = substr(s, 1, p - 1); sub(/\.$/, "", s)
+      if (ulen(s) > W - 12) gsub(/ \([^)]*\)/, "", s)
+      if (ulen(s) > W - 12) { s = ucut(s, W - 13); sub(/[ ,(:;]+[^ ]*$/, "", s); s = s ELL }
+      printf "  %s %s\n", pill(k, t), paint(s) }'
+}
+sessions_tab() {
+  if (( SESS_N == 0 )); then printf '  %sNo coding agent found running.%s\n' "$D" "$X"; return; fi
+  uawk -F'\t' -v lim="${1:-999}" "$AWKLIB"'
+    FNR == NR { n = split($2, a, "/"); fold[$1] = a[n]; next }
+    $1 == "SESS" && ++seen > lim { more++; next }
+    $1 == "SESS" {
+      if (!hdr++) { FW = W - 67; if (FW > 24) FW = 24; if (FW < 8) FW = 8
+        print "  " DIM "  " pad("SESSION", 10) "  " pad("FOLDER", FW) "  " pad("APP", 10) "  " rp("RUNNING", 7) "  " rp("CPU", 6) "  " rp("MEMORY", 8) "  " rp("ACTIVE", 8) RST }
+      dc = ($12 == 1) ? RED : ($16 >= 0 && $16 < 30) ? GRN : ($16 >= 0 && $16 < 600) ? CYA : DIM
+      print "  " dc DOT RST " " scol($2) BLD pad($2, 10) RST "  " BLU pad(($3 in fold) ? fold[$3] : "-", FW) RST "  " scol($15) pad($15, 10) RST "  " rp($4, 7) "  " heat($6, 50, 100) rp(sprintf("%.1f%%", $6), 6) RST "  " heat($7, 1500, 4000) rp(mb($7), 8) RST "  " dc rp($18, 8) RST
+      s = ""
+      if ($12 == 1) s = s pill("r", "looks forgotten") " "
+      if ($13 > 0) s = s pill("y", $13 " suspended") " "
+      if ($9 > 0) s = s YEL pl($9, "idle helper", "idle helpers") RST DIM " holding " mb($10) RST
+      if (s != "" && lim > 5) print "      " DIM ARR RST " " s
+    }
+    END { if (more > 0) print "  " DIM "+ " more " more on the Sessions tab (press 2)" RST }' <(printf '%s\n' "$FOLDERS") <(echo "$SCAN")
+}
+installed_tab() {
+  section "CODING AGENTS ON THIS MAC"
+  local n=0 a where run state apps="" app d
+  while IFS=$'\t' read -r a where run; do
+    [ -n "$a" ] || continue
+    n=$((n + 1))
+    if [ "$where" = "-" ]; then where="not in PATH"; else where="${where/#$HOME/~}"; fi
+    if [ "$run" -gt 0 ]; then state=$(printf '%s%s %-12s%s' "$G" "$DOT" "$run running" "$X"); else state=$(printf '%s%s %-12s%s' "$D" "$DOT" "not running" "$X"); fi
+    printf '  %s%-14s%s %s  %s%s%s\n' "$B" "$a" "$X" "$state" "$D" "${where:0:$((COLS - 36))}" "$X"
+  done <<< "$(installed_scan)"
+  if (( n == 0 )); then printf '  %sNo coding agent found in PATH or the usual install folders.%s\n' "$D" "$X"; fi
+  for app in "Claude" "Codex" "ChatGPT" "Cursor" "Windsurf" "Zed" "Conductor" "Warp" "Ghostty" "iTerm" "Visual Studio Code" "T3 Code" "T3 Code (Beta)" "Xcode"; do
+    for d in /Applications "$HOME/Applications"; do
+      if [ -d "$d/$app.app" ]; then apps="${apps:+$apps, }$app"; break; fi
+    done
+  done
+  if [ -n "$apps" ]; then section "APPS THAT RUN AGENTS"; tab_para "$apps"; fi
+}
+headline_tab() {
+  local n1 n2
+  n1=$(printf '%s' "$NOTES" | awk -F'\t' '$1 == 1' | wc -l | tr -d ' ')
+  n2=$(printf '%s' "$NOTES" | awk -F'\t' '$1 == 2' | wc -l | tr -d ' ')
+  uawk -v a="$n1" -v l="$n2" -v ns="$SESS_N" -v unp="${UN_PCT:-0}" -v agmem="$(fmt_size "${AG_MB}M")" "$AWKLIB"'BEGIN {
+    p = (a > 0) ? pill("r", "ACT ON IT") : (l > 0) ? pill("y", "WORTH A LOOK") : pill("g", "ALL CLEAR")
+    if (ns == 0) s = "No coding agents are running right now."
+    else s = ns (ns == 1 ? " agent session" : " agent sessions") " using " BLD (unp + 0 < 10 ? sprintf("%.1f", unp) : sprintf("%.0f", unp)) "%" RST " of the CPU, " BLD agmem RST " of memory"
+    print "  " p "  " s }'
+}
 tab_overview() {
-  verdict; echo; dash
-  section "WHAT STANDS OUT" "the most important findings; the Findings tab has all of them"
-  print_notes 4
+  headline_tab
+  section "THIS MAC"
+  dash_tab
+  section "YOUR AGENTS"
+  sessions_tab 4
+  section "WHAT STANDS OUT"
+  print_notes_short 3
   local n_all; n_all=$(printf '%s' "$NOTES" | awk 'NF { n++ } END { print n + 0 }')
-  if (( n_all > 4 )); then printf '  %s+ %d more on the Findings tab%s\n' "$D" "$((n_all - 4))" "$X"; fi
-  echo; tab_para "Tabs: Sessions (who is running what), Processes (CPU and memory), Activity (builds, ports, leftovers), Findings, Tree, Agents, Help."
+  if (( n_all > 3 )); then printf '  %s+ %d more: press 5 for all findings%s\n' "$D" "$((n_all - 3))" "$X"; fi
 }
 tab_sessions() {
-  section "AGENT SESSIONS" "each agent and everything it started"
-  sessions_table
-  local idle_installed; idle_installed=$(installed_scan | awk -F'\t' '$3 == 0 { printf "%s%s", (n++ ? ", " : ""), $1 }')
-  if [ -n "$idle_installed" ]; then printf '  %sInstalled here, not running: %s%s\n' "$D" "$idle_installed" "$X"; fi
+  section "AGENT SESSIONS"
+  sessions_tab
   sec_services
-  apps_table
 }
 tab_processes() {
-  section "WHO IS USING THE CPU" "measured over about a second; the owner is the agent session that started it"
+  section "USING THE CPU"
   cpu_table
-  mem_table
   sec_groups
 }
 tab_activity() {
-  sec_builds
-  sec_needs
-  sec_helpers
-  sec_ports
-  sec_awake
-  sec_left
+  local any=0
+  if (( B_AGENT + B_OWN > 0 )); then sec_builds; any=1; fi
+  if (( RUN_N + STUCK_N > 0 )); then sec_needs; any=1; fi
+  if (( DUP_N > 0 )); then sec_helpers; any=1; fi
+  if (( PORT_N > 0 )); then sec_ports; any=1; fi
+  if [ -n "$AWAKE" ]; then sec_awake; any=1; fi
+  if (( LEFT_N > 0 )); then sec_left; any=1; fi
+  if (( ! any )); then section "ACTIVITY"; printf '  %s%s%s No builds, leftovers, held ports or repeated helpers right now.\n' "$G" "$OK" "$X"; fi
 }
 tab_findings() {
-  section "ALL FINDINGS" "most important first"
-  if [ -z "$(printf '%s' "$NOTES" | awk 'NF')" ]; then printf '  %s%s Nothing to report.%s\n' "$G" "$OK" "$X"; else print_notes; fi
-  echo; tab_para "ACT = fix it now   LOOK = worth a look   INFO = good to know. The health score drops 20 per ACT and 7 per LOOK."
+  section "ALL FINDINGS"
+  if [ -z "$(printf '%s' "$NOTES" | awk 'NF')" ]; then printf '  %s%s Nothing to report.%s\n' "$G" "$OK" "$X"; else print_notes 999 1; fi
+  printf '  %sACT fix it now  %s  LOOK worth a look  %s  INFO good to know%s\n' "$D" "$MID" "$MID" "$X"
   sec_unknown
 }
 tab_tree() {
-  section "PROCESS TREE" "every process each session started"
+  section "PROCESS TREE"
   tree_body
 }
 tab_agents() {
-  installed_body
-  sec_services
+  installed_tab
   sec_unknown
 }
 tab_help() {
   section "KEYS"
-  printf '  %s%-26s%s %s\n' "$B" "Left / Right, Tab" "$X" "previous / next tab (or click a tab name)"
-  printf '  %s%-26s%s %s\n' "$B" "1 to 8" "$X" "jump to a tab"
-  printf '  %s%-26s%s %s\n' "$B" "Up / Down, mouse wheel" "$X" "scroll;  PgUp / PgDn or space / b: a page;  g / G: top / bottom"
-  printf '  %s%-26s%s %s\n' "$B" "r" "$X" "refresh now (a snapshot takes about a second)"
-  printf '  %s%-26s%s %s\n' "$B" "a" "$X" "turn auto-refresh (every 5 seconds) on or off"
-  printf '  %s%-26s%s %s\n' "$B" "q, Ctrl-C" "$X" "quit"
-  section "OTHER WAYS TO RUN IT"
-  printf '  %s%-26s%s %s\n' "$B" "yare-doctor plain" "$X" "this report as plain text (what you get when piped)"
-  printf '  %s%-26s%s %s\n' "$B" "yare-doctor watch 60" "$X" "sample for a minute: did an agent build overlap yours?"
-  printf '  %s%-26s%s %s\n' "$B" "yare-doctor why 1234" "$X" "who started process 1234"
-  printf '  %s%-26s%s %s\n' "$B" "yare-doctor share" "$X" "one line of counts to paste in a reply (add redact to hide names)"
-  printf '  %s%-26s%s %s\n' "$B" "yare-doctor help all" "$X" "every option"
-  section "ABOUT"
-  tab_para "Read-only: no network, no files written, nothing stopped. It reads the process list, follows each process up to the agent session that started it, and reports."
-  tab_para "Something missed or wrong? Run  yare-doctor capture > capture.txt  and send the file: it keeps the shape of each command and masks private words."
+  printf '  %s%-18s%s %s\n' "$B" "Left / Right, Tab" "$X" "next tab (or click its name)"
+  printf '  %s%-18s%s %s\n' "$B" "1 to 8" "$X" "jump to a tab"
+  printf '  %s%-18s%s %s\n' "$B" "Up / Down, wheel" "$X" "scroll;  g / G: top / bottom"
+  printf '  %s%-18s%s %s\n' "$B" "r  /  a" "$X" "refresh now  /  auto-refresh every 5 s"
+  printf '  %s%-18s%s %s\n' "$B" "q, Ctrl-C" "$X" "quit"
+  section "MORE"
+  printf '  %s%-22s%s %s\n' "$B" "yare-doctor plain" "$X" "the full report as text"
+  printf '  %s%-22s%s %s\n' "$B" "yare-doctor watch 60" "$X" "did an agent build overlap yours?"
+  printf '  %s%-22s%s %s\n' "$B" "yare-doctor why 1234" "$X" "who started process 1234"
+  printf '  %s%-22s%s %s\n' "$B" "yare-doctor share" "$X" "one line of counts to paste"
+  printf '  %s%-22s%s %s\n' "$B" "yare-doctor help all" "$X" "every option"
+  printf '\n'; tab_para "Read-only: no network, nothing written, nothing stopped. Something missed? Run yare-doctor capture and send the output."
 }
 tabs_render() {
   local i fn
@@ -2555,29 +2662,34 @@ tabs_render() {
   if (( n1 > 0 )); then TAB_BADGE[4]=" $n1"; TAB_BCOL[4]=$'\033[31;1m'; elif (( n2 > 0 )); then TAB_BADGE[4]=" $n2"; TAB_BCOL[4]=$'\033[33;1m'; fi
 }
 tabs_draw() {
-  local out i x vis h total maxs lines shown n hint auto_t
+  local out i x vis h total maxs lines shown n hint auto_t row=4 left right gap hc act inact foot
   h=$((TROWS - 4))
   total=${TAB_N[$TAB_CUR]}; maxs=$((total - h)); (( maxs < 0 )) && maxs=0
   (( TAB_SCROLL > maxs )) && TAB_SCROLL=$maxs; (( TAB_SCROLL < 0 )) && TAB_SCROLL=0
-  out=$'\033[H'"  ${B}yare-doctor${X} ${D}${VERSION}  read-only, nothing is changed${X}   ${D}health${X} ${B}${HSCORE:-100}/100 ${HGRADE:-A}${X}"$'\033[K\n'
-  out="$out  "; x=3
+  if (( P256 )); then act=$'\033[1;38;5;16;48;5;81m'; inact=$'\033[38;5;252m'; foot=$'\033[38;5;245m'; else act=$'\033[1;30;46m'; inact=$'\033[37m'; foot=$'\033[2m'; fi
+  case ${HGRADE:-A} in A|B) hc=$'\033[1;32m' ;; C) hc=$'\033[1;33m' ;; *) hc=$'\033[1;31m' ;; esac
+  # every row is placed by its row number and line wrapping is off, so nothing can push the title and the tab bar off the screen
+  left="  yare-doctor ${VERSION}"; right="health ${HSCORE:-100}/100 ${HGRADE:-A}  "
+  gap=$(( TCOLS - ${#left} - ${#right} )); (( gap < 1 )) && gap=1
+  out=$'\033[1;1H'"  ${B}yare-doctor${X} ${D}${VERSION}${X}$(printf '%*s' "$gap" '')${D}health${X} ${hc}${HSCORE:-100}/100 ${HGRADE:-A}${X}  "$'\033[K'
+  out="$out"$'\033[2;1H  '; x=3
   for i in 0 1 2 3 4 5 6 7; do
     vis=" ${TAB_NAMES[$i]}${TAB_BADGE[$i]:-} "
     TAB_X0[$i]=$x; TAB_X1[$i]=$((x + ${#vis} - 1))
-    if (( i == TAB_CUR )); then out="$out"$'\033[7;1m'"$vis"$'\033[0m'
+    if (( i == TAB_CUR )); then out="$out$act$vis"$'\033[0m'
     elif [ -n "${TAB_BCOL[$i]:-}" ]; then out="$out${TAB_BCOL[$i]}$vis"$'\033[0m'
-    else out="$out"$'\033[2m'"$vis"$'\033[0m'; fi
-    out="$out "; x=$((x + ${#vis} + 1))
+    else out="$out$inact$vis"$'\033[0m'; fi
+    x=$((x + ${#vis}))
   done
-  out="$out"$'\033[K\n'"$(rule)"$'\033[K\n'
+  out="$out"$'\033[K\033[3;1H'"$(rule)"$'\033[K'
   lines=$(printf '%s\n' "${TAB_TXT[$TAB_CUR]}" | sed -n "$((TAB_SCROLL + 1)),$((TAB_SCROLL + h))p")
   shown=0
-  while IFS= read -r line; do out="$out$line"$'\033[K\n'; shown=$((shown + 1)); done <<< "$lines"
-  while (( shown < h )); do out="$out"$'\033[K\n'; shown=$((shown + 1)); done
+  while IFS= read -r line; do out="$out"$'\033['"$row"';1H'"$line"$'\033[K'; row=$((row + 1)); shown=$((shown + 1)); done <<< "$lines"
+  while (( shown < h )); do out="$out"$'\033['"$row"$';1H\033[K'; row=$((row + 1)); shown=$((shown + 1)); done
   if (( TAB_AUTO )); then auto_t="auto-refresh on"; else auto_t="r refresh"; fi
-  hint="  Left/Right or click: tabs   Up/Down: scroll   $auto_t   a: auto   ?: help   q: quit"
-  n=""; (( total > h )) && n="  lines $((TAB_SCROLL + 1))-$((TAB_SCROLL + h > total ? total : TAB_SCROLL + h)) of $total"
-  out="$out"$'\033[2m'"$hint$n  ${TAB_STAMP:+updated $TAB_STAMP}${TAB_STATUS:+  $TAB_STATUS}"$'\033[0m\033[K'
+  if [ "$FULL" = "█" ]; then hint="  ←/→ tabs   ↑/↓ scroll   $auto_t   q quit"; else hint="  Left/Right: tabs   Up/Down: scroll   $auto_t   q: quit"; fi
+  n=""; (( total > h )) && n="   $((TAB_SCROLL + 1))-$((TAB_SCROLL + h > total ? total : TAB_SCROLL + h)) of $total"
+  out="$out"$'\033['"$TROWS"';1H'"$foot$hint$n   ${TAB_STAMP:+$TAB_STAMP}${TAB_STATUS:+  $TAB_STATUS}"$'\033[0m\033[K'
   printf '%s' "$out"
 }
 tabs_size() {
@@ -2629,12 +2741,13 @@ tabs_mode() {
   TAB_TXT=(); TAB_N=(); TAB_BADGE=(); TAB_BCOL=(); TAB_X0=(); TAB_X1=()
   WANT_TREE=1
   saved_stty=$(stty -g 2>/dev/null || true)
-  tabs_cleanup() { printf '\033[?1006l\033[?1000l\033[?25h\033[?1049l'; [ -n "$saved_stty" ] && stty "$saved_stty" 2>/dev/null; return 0; }
+  tabs_cleanup() { printf '\033[?7h\033[?1006l\033[?1000l\033[?25h\033[?1049l'; [ -n "$saved_stty" ] && stty "$saved_stty" 2>/dev/null; return 0; }
   trap 'tabs_cleanup; exit 0' EXIT
   trap 'exit 130' INT TERM
   trap 'RESIZED=1' WINCH
   stty -echo 2>/dev/null || true
-  printf '\033[?1049h\033[?25l\033[?1000h\033[?1006h\033[2J\033[H'
+  printf '\033[?1049h\033[?25l\033[?7l\033[?1000h\033[?1006h\033[2J\033[H'
+  TABMODE=1
   COLUMNS=$TCOLS; setup_ui
   printf '\033[H  %sReading the process list...%s\033[J' "$D" "$X"
   prepare; tabs_render; TAB_STAMP=$(date +%H:%M:%S); TAB_LAST=$(date +%s)
@@ -2643,7 +2756,8 @@ tabs_mode() {
     if (( dirty )); then tabs_draw; dirty=0; fi
     tabs_key
     case $KEY in
-      TIMEOUT) now=$(date +%s); if (( TAB_AUTO )) && (( now - TAB_LAST >= 5 )); then tabs_refresh; dirty=1; fi ;;
+      TIMEOUT) local osz="$TROWS $TCOLS"; tabs_size; if [ "$osz" != "$TROWS $TCOLS" ]; then RESIZED=1; fi
+               now=$(date +%s); if (( TAB_AUTO )) && (( now - TAB_LAST >= 5 )); then tabs_refresh; dirty=1; fi ;;
       q|Q) break ;;
       RIGHT|TAB|l) TAB_CUR=$(( (TAB_CUR + 1) % 8 )); TAB_SCROLL=0; dirty=1 ;;
       LEFT|BTAB|h) TAB_CUR=$(( (TAB_CUR + 7) % 8 )); TAB_SCROLL=0; dirty=1 ;;

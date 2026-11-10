@@ -15,6 +15,10 @@ First public release.
 - Sessions are numbered oldest first, so labels stay put. The host is found from the app, tmux or ssh (19 terminals and editors tested).
 - All 25 agents were launched for real on one Apple Silicon Mac (Hermes and the Claude desktop app were seen live) and their actual process lists are in `--selftest`.
 
+**The tabbed screen** (what plain `yare-doctor` opens in a terminal)
+- Eight tabs (Overview, Sessions, Processes, Activity, Findings, Tree, Agents, Help), clickable or with the arrow keys. Every row is placed by its row number and line wrapping is off, so the title and tab bar can never scroll off the screen, whatever the terminal size. It fits 80 columns.
+- The Overview reads top to bottom: a one-line summary, this Mac's gauges, your agents, then the top findings.
+
 **What it shows**
 - Per session: folder, git branch (read from `.git/HEAD`, no git run), MCP servers, network bytes, program version, what it is running now.
 - Findings: sessions building in the same folder, stale git locks, a session waiting for a password or login, a spawn storm, two versions of one agent running, an overloaded Mac, VM memory, forgotten sessions, idle and repeated helpers, held ports.
