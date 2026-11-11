@@ -2,6 +2,15 @@
 
 Versions follow [semver](https://semver.org). The 0.x line means the output format and options can still change.
 
+## 0.1.2 (2026-11-10)
+
+Leftover detection, from what people reported in public issues about agents that leave processes behind.
+
+- A process with no parent whose command holds `.claude/shell-snapshots/` (the shell wrapper Claude Code starts for a Bash call) now counts as a possible leftover. So does a parentless test run (`pytest`, `jest`, `vitest`, `mocha`) alive over 30 minutes.
+- Whatever a leftover started counts with it, so a busy child of a shell that outlived its session is listed too.
+- The leftover list has a new CPU USED column, so a leftover that has used days of CPU time stands out from an idle one.
+- Memory by program and repeated helpers say that the count is exact and the memory is an upper bound, because pages shared between copies are counted for each copy.
+
 ## 0.1.1 (2026-11-10)
 
 A redesigned tabbed screen (what plain `yare-doctor` opens in a terminal). Nothing else changed: detection, the plain report and the JSON output are as in 0.1.0.

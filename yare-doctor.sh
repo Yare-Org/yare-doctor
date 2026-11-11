@@ -6,7 +6,7 @@
 #
 # What it does that Activity Monitor does not: it follows the parent chain of every process, so it can say which agent
 # session started what, how much of the Mac each session is holding, who is using the CPU, and what was left behind.
-VERSION="0.1.1"; RELEASED="2026-11-10"
+VERSION="0.1.2"; RELEASED="2026-11-10"
 set -u
 # cron and launchd start scripts with almost no environment: make sure HOME and the system tool folders exist
 if [ -z "${HOME:-}" ]; then HOME=$(dscl . -read "/Users/$(id -un)" NFSHomeDirectory 2>/dev/null | awk '{ print $2 }'); HOME=${HOME:-/var/root}; export HOME; fi
@@ -169,7 +169,7 @@ TAB=$'\t'
 #   TOP pid owner cpu% memMB name                          processes using CPU, with the agent session that owns them
 #   BUILD agent|own count cpu%                             builds and tests, by whether an agent started them
 #   DUP signature count memMB sessions                     the same helper started 3+ times inside agent sessions
-#   LEFT pid cpu% memMB elapsed command                    helpers with no parent that look left over from ended sessions
+#   LEFT pid cpu% memMB elapsed command cputime            helpers with no parent that look left over from ended sessions, and what they started
 #   MAP pid owner                                          processes owned by a session or left over (to match ports)
 #   WAIT pid owner age name                                a process in a session that is probably waiting for a person to answer
 #   MCPS label count memMB                                 MCP servers a session started
@@ -523,9 +523,16 @@ scan() {
     for (pid in n) {
       low = LOW[pid]
       if (pid in HELP) continue
-      if (P[pid] == 1 && !(pid in AG) && low !~ /^\/(system|usr|library)\// && ((low ~ /(mcp|claude|codex|opencode|gemini|aider)/ && low ~ /(node|python|bun|deno|uvx|npx|mcp)/ && low !~ /\.app\/contents\/macos\//) || low ~ /(--remote-debugging|--headless|playwright|puppeteer|chromedriver|geckodriver|chrome-for-testing|tsserver|typescript-language-server|sourcekit-lsp|pyright|rust-analyzer|gopls|esbuild --service|next dev|next-server|storybook|webpack serve|vite)/)) {
-        if (etsecs(E[pid]) > 1800) { LEFTF[pid] = 1; printf "LEFT\t%s\t%s\t%d\t%s\t%s\n", pid, C[pid], R[pid] / 1024, E[pid], substr(CMD[pid], 1, 70) }
+      if (P[pid] == 1 && !(pid in AG) && low !~ /^\/(system|usr|library)\// && ((low ~ /(mcp|claude|codex|opencode|gemini|aider)/ && low ~ /(node|python|bun|deno|uvx|npx|mcp)/ && low !~ /\.app\/contents\/macos\//) || low ~ /(--remote-debugging|--headless|playwright|puppeteer|chromedriver|geckodriver|chrome-for-testing|tsserver|typescript-language-server|sourcekit-lsp|pyright|rust-analyzer|gopls|esbuild --service|next dev|next-server|storybook|webpack serve|vite)/ || low ~ /\.claude\/shell-snapshots\/|(^|[ \/])(pytest|py\.test|jest|vitest|mocha)( |$)/)) {
+        if (etsecs(E[pid]) > 1800) { LEFTF[pid] = 1; printf "LEFT\t%s\t%s\t%d\t%s\t%s\t%s\n", pid, C[pid], R[pid] / 1024, E[pid], substr(CMD[pid], 1, 70), T[pid] }
       }
+    }
+    # whatever a leftover started is left over with it (a shell wrapper that outlived its session keeps its child running)
+    for (pid in n) {
+      if ((pid in HELP) || (pid in LEFTF) || (pid in AG)) continue
+      q = P[pid]
+      for (hop = 0; hop < 10 && q in n && !(q in LEFTF); hop++) q = P[q]
+      if (q in LEFTF) { LEFTK[pid] = 1; printf "LEFT\t%s\t%s\t%d\t%s\t%s\t%s\n", pid, C[pid], R[pid] / 1024, E[pid], substr(CMD[pid], 1, 70), T[pid] }
     }
 
     for (pid in n) {
@@ -1163,7 +1170,7 @@ sec_needs() {
 sec_groups() {
   local gt; gt=$(echo "$SCAN" | awk -F'\t' '$1 == "GRP"' | sort -t"$TAB" -k4 -nr | head -5)
   if [ -n "$gt" ]; then
-    section "MEMORY BY PROGRAM" "the same program counted together, so many small processes show up"
+    section "MEMORY BY PROGRAM" "counted together by program name; the count is exact, memory is an upper bound (shared pages are counted per copy)"
     echo "$gt" | uawk -F'\t' "$AWKLIB"'{ nm[NR] = $2; cnt[NR] = $3; mem[NR] = $4; cpu[NR] = $5; ag[NR] = $6; if ($4 > mx) mx = $4 }
       END { printf "  %s%-30s  %-8s %6s %9s  %s%s\n", DIM, "PROGRAM", "", "COUNT", "MEMORY", "IN AGENTS", RST
         for (i = 1; i <= NR; i++) printf "  %s%-30s%s  %s%s%s %6d %s%9s%s  %s\n", (ag[i] > 0 ? BLD : ""), pad(nm[i], 30), RST, heat(mem[i], 2000, 6000), bar(mem[i] / mx, 8), RST, cnt[i], heat(mem[i], 2000, 6000), mb(mem[i]), RST, (ag[i] > 0 ? MAG BLD ag[i] " of " cnt[i] RST : DIM "none" RST) }'
@@ -1181,7 +1188,7 @@ sec_builds() {
 }
 sec_helpers() {
   if (( DUP_N > 0 )); then
-    section "THE SAME HELPER STARTED MANY TIMES" "3 or more inside agent sessions"
+    section "THE SAME HELPER STARTED MANY TIMES" "3 or more inside agent sessions; memory is an upper bound (shared pages are counted per copy)"
     echo "$SCAN" | awk -F'\t' '$1 == "DUP"' | sort -t"$TAB" -k3 -nr | head -5 | uawk -F'\t' "$AWKLIB"'{ printf "  %s%3d x%s  %-34s %s%9s%s  %sacross %s%s\n", YEL BLD, $3, RST, pad($2, 34), heat($4, 500, 2000), mb($4), RST, DIM, pl($5, "session", "sessions"), RST }'
   fi
 }
@@ -1201,7 +1208,7 @@ sec_awake() {
 sec_left() {
   if (( LEFT_N > 0 )); then
     section "POSSIBLE LEFTOVERS" "no parent, alive over 30 minutes: may be from sessions that ended"
-    echo "$SCAN" | uawk -F'\t' "$AWKLIB"'$1 == "LEFT" { if (!h++) printf "  %s%8s %6s %9s %-10s %s%s\n", DIM, "PID", "CPU", "MEMORY", "RUNNING", "COMMAND", RST; printf "  %8s %5s%% %9s %-10s %s\n", $2, $3, mb($4), $5, fit($6, W - 44) }'
+    echo "$SCAN" | uawk -F'\t' "$AWKLIB"'$1 == "LEFT" { if (!h++) printf "  %s%8s %6s %9s %-10s %-10s %s%s\n", DIM, "PID", "CPU", "MEMORY", "RUNNING", "CPU USED", "COMMAND", RST; printf "  %8s %5s%% %9s %-10s %-10s %s\n", $2, $3, mb($4), $5, $7, fit($6, W - 55) }'
     printf '  %sCheck before closing any. To close one: kill PID. This script never does.%s\n' "$D" "$X"
   fi
 }
@@ -1502,6 +1509,9 @@ selftest() {
 107 106 S 0.0 1000 01:00 00:00.01 /usr/local/bin/claude -p subtask
 108 100 S 0.0 1000 30:00 00:00.50 /usr/bin/clang -c hung.c
 300 1 S 0.0 40000 01:00:00 00:00.10 node /w/mcp-leftover.js
+301 1 S 0.0 9000 93:00:00 00:00.10 /bin/zsh -c source /Users/x/.claude/shell-snapshots/snapshot-zsh-1.sh && eval 'python3 job.py'
+302 301 S 5.0 50000 93:00:00 5600:00.00 python3 job.py
+303 1 S 0.0 30000 47:00:00 00:03.00 /Users/x/proj/.venv/bin/python -m pytest tests
 400 1 S 80.0 100000 10:00 05:00.00 /opt/homebrew/bin/node /srv/dev-server.js
 EOF
   }
@@ -1515,13 +1525,14 @@ EOF
   chk "hung build found" "$(count HUNG)" 1
   chk "same helper 3 times found" "$(echo "$SCAN" | awk -F'\t' '$1 == "DUP" { print $3 }')" 3
   chk "program group found (node x5)" "$(echo "$SCAN" | awk -F'\t' '$1 == "GRP" && $2 == "node" { print $3 }')" 5
-  chk "leftover found" "$(count LEFT)" 1
+  chk "leftovers found (mcp server, shell wrapper, its child, pytest)" "$(count LEFT)" 4
+  chk "leftover keeps its CPU time" "$(echo "$SCAN" | awk -F'\t' '$1 == "LEFT" && $2 == 302 { print $7 }')" 5600:00.00
   chk "busy detached process found" "$(count DETACH)" 1
   chk "suspended process found" "$(count STUCK)" 1
   chk "runaway process found" "$(count RUN)" 1
   chk "MCP servers counted per session" "$(echo "$SCAN" | awk -F'\t' '$1 == "MCPS" { print $3 }')" 3
   chk "busiest thing the session runs now" "$(echo "$SCAN" | awk -F'\t' '$1 == "NOW" { print $6 }')" python3
-  chk "this script and its tools are not counted" "$(echo "$SCAN" | awk -F'\t' '$1 == "TOT" { print $6 }')" 12
+  chk "this script and its tools are not counted" "$(echo "$SCAN" | awk -F'\t' '$1 == "TOT" { print $6 }')" 15
   # 1b) which command lines are coding agents: every case is one process; "-" means it must NOT be recognised
   section "DETECTION" "what counts as a coding agent, and what must not"
   det() { # expected, command line
