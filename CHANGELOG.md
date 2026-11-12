@@ -2,6 +2,10 @@
 
 Versions follow [semver](https://semver.org). The 0.x line means the output format and options can still change.
 
+## 0.2.1 (2026-11-11)
+
+- The share link under `yare-doctor card` is a clickable hyperlink in the terminal: cmd+click opens it (iTerm2, Ghostty, WezTerm, kitty, VS Code, Warp; other terminals show the plain link). When piped, it is the plain link as before.
+
 ## 0.2.0 (2026-11-11)
 
 A score you can share.
