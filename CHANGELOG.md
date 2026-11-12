@@ -2,6 +2,14 @@
 
 Versions follow [semver](https://semver.org). The 0.x line means the output format and options can still change.
 
+## 0.2.0 (2026-11-11)
+
+A score you can share.
+
+- `yare-doctor card` prints a link under the card. Paste it on X, Reddit, Slack or anywhere that shows link previews and it appears as a picture of your card: the health score and grade, agent sessions, memory held by agents, leftover processes and your chip and memory size.
+- The link holds those counts only: no names, folder names, paths or commands. The script still sends nothing and opens nothing; it prints the link and you decide whether to post it.
+- The selftest checks the link (248 checks).
+
 ## 0.1.2 (2026-11-10)
 
 Leftover detection, from what people reported in public issues about agents that leave processes behind.

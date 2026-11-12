@@ -6,7 +6,7 @@
 #
 # What it does that Activity Monitor does not: it follows the parent chain of every process, so it can say which agent
 # session started what, how much of the Mac each session is holding, who is using the CPU, and what was left behind.
-VERSION="0.1.2"; RELEASED="2026-11-10"
+VERSION="0.2.0"; RELEASED="2026-11-11"
 set -u
 # cron and launchd start scripts with almost no environment: make sure HOME and the system tool folders exist
 if [ -z "${HOME:-}" ]; then HOME=$(dscl . -read "/Users/$(id -un)" NFSHomeDirectory 2>/dev/null | awk '{ print $2 }'); HOME=${HOME:-/var/root}; export HOME; fi
@@ -25,6 +25,7 @@ ${b}yare-doctor live${x}       the same, refreshing (q quits)
 ${b}yare-doctor tree${x}       every process each session started, as a tree
 ${b}yare-doctor why${x} PID    who started this process, and which agent session it belongs to
 ${b}yare-doctor cleanup${x}    what could be closed, with the kill commands (printed, never run)
+${b}yare-doctor card${x}       your Mac's score as a small card, with a link that shows it as a picture when you post it
 ${b}yare-doctor share${x}      add a line of counts (no paths or names) to paste in a reply;  add ${b}redact${x} to hide folder names
 ${b}yare-doctor json${x}       the same data as JSON         ${b}yare-doctor help all${x}  every option (installed, html, check, snippet ...)
 
@@ -51,7 +52,7 @@ ${b}LOOK${x}
   ${b}--cleanup${x}        what could be closed, with the exact kill commands. It only prints them; it never runs them.
 
 ${b}SUMMARIES${x}
-  ${b}--card${x}           a small boxed summary with a health score, made for screenshots.
+  ${b}--card${x}           a small boxed summary with a health score, plus a link (counts only) that shows it as a picture when posted.
   ${b}--awards${x}         superlatives for your sessions (the heavyweight, the marathoner, the sleeper ...).
   ${b}--vibe${x}           how the Mac feels, in one line.   ${b}--zoo${x}  every session as the animal it behaves like.
   ${b}--slow${x}           why the Mac may feel slow right now, and how much of it the agents are to blame for.
@@ -1528,6 +1529,7 @@ EOF
   chk "leftovers found (mcp server, shell wrapper, its child, pytest)" "$(count LEFT)" 4
   chk "leftover keeps its CPU time" "$(echo "$SCAN" | awk -F'\t' '$1 == "LEFT" && $2 == 302 { print $7 }')" 5600:00.00
   chk "busy detached process found" "$(count DETACH)" 1
+  chk "card link holds counts only" "$( HSCORE=79; HGRADE=C; SESS_N=3; AG_MB=1200; LEFT_N=2; MEM_GB=16; OSINFO="macOS 27.2, Apple M2 Pro"; NOTES=""; YARE_DOCTOR_SITE=https://x.test; card_link )" "https://x.test/c?s=79&g=C&a=3&m=1200&l=2&f=0&r=16&c=M2-Pro&v=$VERSION&utm_source=card&utm_medium=share&utm_campaign=doctor-card"
   chk "suspended process found" "$(count STUCK)" 1
   chk "runaway process found" "$(count RUN)" 1
   chk "MCP servers counted per session" "$(echo "$SCAN" | awk -F'\t' '$1 == "MCPS" { print $3 }')" 3
@@ -2204,6 +2206,17 @@ card() {
   local v; v=$(vibe)
   crow "\"$v\"" "${D}\"$v\"${X}"
   printf '%s%s%s\n' "$D" "$bot" "$X"
+  printf '%sShare it: paste this link anywhere and it shows as a picture of this card.%s\n' "$D" "$X"
+  printf '%s\n' "$(card_link)"
+  printf '%sThe link holds these counts only: no names, paths or commands. Nothing is sent; you choose whether to post it.%s\n' "$D" "$X"
+}
+# The public link for --card: counts only (score, grade, sessions, agent memory, leftovers, findings, memory size, chip).
+card_link() {
+  local chip findings
+  chip=$(printf '%s' "${OSINFO#*, }" | sed 's/^Apple //' | tr ' ' '-' | tr -cd 'A-Za-z0-9-' | cut -c1-24)
+  findings=$(printf '%s' "$NOTES" | awk -F'\t' '$1 <= 2' | wc -l | tr -d ' ')
+  printf '%s/c?s=%s&g=%s&a=%s&m=%s&l=%s&f=%s&r=%s&c=%s&v=%s&utm_source=card&utm_medium=share&utm_campaign=doctor-card\n' \
+    "${YARE_DOCTOR_SITE:-https://meetyare.vercel.app}" "$HSCORE" "$HGRADE" "$SESS_N" "${AG_MB:-0}" "${LEFT_N:-0}" "$findings" "$MEM_GB" "$chip" "$VERSION"
 }
 
 # ---- --awards: fun superlatives for the sessions ----

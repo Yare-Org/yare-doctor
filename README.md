@@ -23,6 +23,7 @@ yare-doctor watch 60         # sample for a minute while an agent builds: did it
 yare-doctor plain            # the same picture as one plain report (this is also what you get when output is piped)
 yare-doctor tree             # every process each session started, as a tree
 yare-doctor why 1234         # who started process 1234, and which agent session it belongs to
+yare-doctor card             # your Mac's score as a small card, plus a link that shows it as a picture when you post it
 yare-doctor cleanup          # what could be closed, with the kill commands (printed, never run)
 yare-doctor share            # adds one line of counts (no paths or names) to paste in a reply; add "redact" to hide folder names
 yare-doctor help             # the short list; "yare-doctor help all" shows every option (json, html, check, snippet, installed ...)
@@ -39,7 +40,7 @@ It is about 2,000 lines of bash. **Read it before you run it**; that is what it 
 Colour and bars in a terminal; plain text when piped or with `--no-color`. This is the top of a real report on a Mac with four agent sessions, run with `--redact` (folder names hidden):
 
 ```text
-yare-doctor  0.1.2 · read-only · nothing was changed
+yare-doctor  0.2.0 · read-only · nothing was changed
 ──────────────────────────────────────────────────────────────────────────────────────────────────
 
   Mac       Apple M3 Max · 14 cores · 36 GB · macOS 27.2 · up 7 days
