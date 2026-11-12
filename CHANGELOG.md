@@ -2,6 +2,14 @@
 
 Versions follow [semver](https://semver.org). The 0.x line means the output format and options can still change.
 
+## 0.3.0 (2026-11-11)
+
+Short share links for the card.
+
+- `yare-doctor card` no longer prints a long link with the numbers in it. Press `s` to share: the numbers on the card are uploaded and you get a short link like `https://meetyare.vercel.app/c/k3T9xQ2a`, copied to the clipboard. Press `o` to share and open it in your browser. Any other key, or 60 seconds, finishes without sending anything.
+- **This is the first and only network call in yare-doctor**, and it only happens on that key press. What is sent: health score and grade, agent sessions, memory held by agents, leftover processes, findings, chip, memory size and the yare-doctor version. No names, paths, commands or anything that identifies your Mac. When the output is piped, nothing is uploaded.
+- Old long links from 0.2.x keep working.
+
 ## 0.2.2 (2026-11-11)
 
 - Under `yare-doctor card`, press `o` to open the share page in your browser or `c` to copy the link. Terminal.app only opens links on cmd+double-click, so this works the same in every terminal. Nothing happens unless you press one of those keys; any other key, or 60 seconds, just finishes. When the output is piped there is no prompt.

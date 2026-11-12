@@ -23,7 +23,7 @@ yare-doctor watch 60         # sample for a minute while an agent builds: did it
 yare-doctor plain            # the same picture as one plain report (this is also what you get when output is piped)
 yare-doctor tree             # every process each session started, as a tree
 yare-doctor why 1234         # who started process 1234, and which agent session it belongs to
-yare-doctor card             # your Mac's score as a small card, plus a link that shows it as a picture when you post it
+yare-doctor card             # your Mac's score as a small card; press s to share it as a short link that shows as a picture
 yare-doctor cleanup          # what could be closed, with the kill commands (printed, never run)
 yare-doctor share            # adds one line of counts (no paths or names) to paste in a reply; add "redact" to hide folder names
 yare-doctor help             # the short list; "yare-doctor help all" shows every option (json, html, check, snippet, installed ...)
@@ -40,7 +40,7 @@ It is about 2,000 lines of bash. **Read it before you run it**; that is what it 
 Colour and bars in a terminal; plain text when piped or with `--no-color`. This is the top of a real report on a Mac with four agent sessions, run with `--redact` (folder names hidden):
 
 ```text
-yare-doctor  0.2.2 · read-only · nothing was changed
+yare-doctor  0.3.0 · read-only · nothing was changed
 ──────────────────────────────────────────────────────────────────────────────────────────────────
 
   Mac       Apple M3 Max · 14 cores · 36 GB · macOS 27.2 · up 7 days
@@ -113,7 +113,7 @@ Processes that no longer have a parent (a dev server an agent left running, or a
 ## What it does not do
 
 - It does not change anything. It uses only `ps`, `sysctl`, `memory_pressure`, `pmset`, `df`, `sw_vers`, `vm_stat`, `ioreg`, `tmutil status` and `lsof` (which only lists open ports and never connects).
-- It makes **no network calls** and writes **no files**. The only thing it ever does besides printing is the optional `--notify`, which shows a macOS notification. It does not stop or kill any process (for leftovers it only prints a `kill PID` hint for you to use yourself).
+- It makes **no network calls** unless you share a card: under `yare-doctor card`, pressing `s` (or `o`) uploads only the numbers on the card (score, grade, sessions, agent memory, leftovers, findings, chip, memory size, version) to meetyare.vercel.app and gives you a short link. Nothing else is ever sent, and nothing is sent unless you press that key. It writes **no files**. Besides printing and that upload, the only thing it does is the optional `--notify`, which shows a macOS notification. It does not stop or kill any process (for leftovers it only prints a `kill PID` hint for you to use yourself).
 - `--share` output contains counts only: no paths, user names or command lines. The on-screen report does print process names (for example `node twitter-server`), so look before you paste a screenshot.
 
 ## Limits, stated plainly

@@ -1,12 +1,12 @@
 #!/bin/bash
 # yare-doctor: read-only check of what your coding agents are running on this Mac.
-# Uses only `ps`, `sysctl`, `memory_pressure`, `pmset`, `df`, `sw_vers`, `vm_stat`, `ioreg`, `tmutil` (status only) and `lsof` (listing, never connecting). No network, no files
+# Uses only `ps`, `sysctl`, `memory_pressure`, `pmset`, `df`, `sw_vers`, `vm_stat`, `ioreg`, `tmutil` (status only) and `lsof` (listing, never connecting). No network (except `curl` to upload a card's numbers when you press s under `yare-doctor card`), no files
 # written, nothing killed or changed. Early prototype helper from the Yare project. It reports; it does not claim a speed-up.
 # Works with the bash that ships with macOS (3.2).
 #
 # What it does that Activity Monitor does not: it follows the parent chain of every process, so it can say which agent
 # session started what, how much of the Mac each session is holding, who is using the CPU, and what was left behind.
-VERSION="0.2.2"; RELEASED="2026-11-11"
+VERSION="0.3.0"; RELEASED="2026-11-11"
 set -u
 # cron and launchd start scripts with almost no environment: make sure HOME and the system tool folders exist
 if [ -z "${HOME:-}" ]; then HOME=$(dscl . -read "/Users/$(id -un)" NFSHomeDirectory 2>/dev/null | awk '{ print $2 }'); HOME=${HOME:-/var/root}; export HOME; fi
@@ -25,11 +25,11 @@ ${b}yare-doctor live${x}       the same, refreshing (q quits)
 ${b}yare-doctor tree${x}       every process each session started, as a tree
 ${b}yare-doctor why${x} PID    who started this process, and which agent session it belongs to
 ${b}yare-doctor cleanup${x}    what could be closed, with the kill commands (printed, never run)
-${b}yare-doctor card${x}       your Mac's score as a small card, with a link that shows it as a picture when you post it
+${b}yare-doctor card${x}       your Mac's score as a small card; press s to share it as a short link
 ${b}yare-doctor share${x}      add a line of counts (no paths or names) to paste in a reply;  add ${b}redact${x} to hide folder names
 ${b}yare-doctor json${x}       the same data as JSON         ${b}yare-doctor help all${x}  every option (installed, html, check, snippet ...)
 
-${d}It never changes anything: no network, no files written, nothing stopped. Read it first.${x}
+${d}It never changes anything: nothing written, nothing stopped, no network (unless you press s to share a card). Read it first.${x}
 EOF
 }
 
@@ -52,7 +52,7 @@ ${b}LOOK${x}
   ${b}--cleanup${x}        what could be closed, with the exact kill commands. It only prints them; it never runs them.
 
 ${b}SUMMARIES${x}
-  ${b}--card${x}           a small boxed summary with a health score, plus a link (counts only) that shows it as a picture when posted.
+  ${b}--card${x}           a small boxed summary with a health score. Press s to share it: uploads only its numbers, gives a short link.
   ${b}--awards${x}         superlatives for your sessions (the heavyweight, the marathoner, the sleeper ...).
   ${b}--vibe${x}           how the Mac feels, in one line.   ${b}--zoo${x}  every session as the animal it behaves like.
   ${b}--slow${x}           why the Mac may feel slow right now, and how much of it the agents are to blame for.
@@ -83,7 +83,7 @@ ${b}TRUST${x}
   ${b}--checksum${x}       this file's sha256, to compare with the one in the GitHub release notes.
   ${b}--no-color${x}       plain text (also automatic when piped, or when NO_COLOR is set).  ${b}--version${x}
 
-${d}It never changes anything: no network, no files written, nothing stopped. Read it first.${x}
+${d}It never changes anything: nothing written, nothing stopped, no network (unless you press s to share a card). Read it first.${x}
 EOF
 }
 
@@ -1529,7 +1529,7 @@ EOF
   chk "leftovers found (mcp server, shell wrapper, its child, pytest)" "$(count LEFT)" 4
   chk "leftover keeps its CPU time" "$(echo "$SCAN" | awk -F'\t' '$1 == "LEFT" && $2 == 302 { print $7 }')" 5600:00.00
   chk "busy detached process found" "$(count DETACH)" 1
-  chk "card link holds counts only" "$( HSCORE=79; HGRADE=C; SESS_N=3; AG_MB=1200; LEFT_N=2; MEM_GB=16; OSINFO="macOS 27.2, Apple M2 Pro"; NOTES=""; YARE_DOCTOR_SITE=https://x.test; card_link )" "https://x.test/c?s=79&g=C&a=3&m=1200&l=2&f=0&r=16&c=M2-Pro&v=$VERSION&utm_source=card&utm_medium=share&utm_campaign=doctor-card"
+  chk "card upload holds the card's numbers only" "$( HSCORE=79; HGRADE=C; SESS_N=3; AG_MB=1200; LEFT_N=2; MEM_GB=16; OSINFO="macOS 27.2, Apple M2 Pro"; NOTES=""; card_json )" "{\"s\":79,\"g\":\"C\",\"a\":3,\"m\":1200,\"l\":2,\"f\":0,\"r\":16,\"c\":\"M2-Pro\",\"v\":\"$VERSION\"}"
   chk "suspended process found" "$(count STUCK)" 1
   chk "runaway process found" "$(count RUN)" 1
   chk "MCP servers counted per session" "$(echo "$SCAN" | awk -F'\t' '$1 == "MCPS" { print $3 }')" 3
@@ -2206,38 +2206,49 @@ card() {
   local v; v=$(vibe)
   crow "\"$v\"" "${D}\"$v\"${X}"
   printf '%s%s%s\n' "$D" "$bot" "$X"
-  local link; link=$(card_link)
-  printf '%sShare it: paste this link anywhere and it shows as a picture of this card.%s\n' "$D" "$X"
-  if (( ON )) && [ -t 1 ]; then
-    # OSC 8 makes the whole link one clickable target (iTerm2, Ghostty, WezTerm, kitty, VS Code, Warp); terminals
-    # without it just show the plain URL, which they usually still open on cmd+click
-    printf '\033]8;;%s\033\\%s\033[4m%s%s\033]8;;\033\\\n' "$link" "$C" "$link" "$X"
-  else
-    printf '%s\n' "$link"
-  fi
-  printf '%sThe link holds these counts only: no names, paths or commands. Nothing is sent; you choose whether to post it.%s\n' "$D" "$X"
-  card_keys "$link"
+  card_share
 }
-# In a terminal, one key opens the card page or copies the link, so nobody has to click a long URL (Terminal.app only
-# opens links on cmd+double-click). Only on a key press, never on its own; anything else, or 60 s, just finishes.
-card_keys() {
-  [ -t 0 ] && [ -t 1 ] && [ -z "$FROM_FILE" ] || return 0
-  local k=""
-  printf '\n  %s%so%s open it in your browser   %s%sc%s copy the link   %sany other key: done%s ' "$B" "$C" "$X" "$B" "$C" "$X" "$D" "$X"
+# Sharing is the one thing that uses the network, and only when you press s or o under the card in a terminal:
+# it uploads the numbers on the card (no names, paths or commands) and gets back a short link like /c/k3T9xQ2a.
+card_share() {
+  if ! { [ -t 0 ] && [ -t 1 ] && [ -z "$FROM_FILE" ]; }; then
+    printf '%sTo share this card as a picture, run yare-doctor card in a terminal and press s.%s\n' "$D" "$X"
+    return 0
+  fi
+  local k="" url
+  printf '%sPress s to share: it uploads only the numbers on this card and gives you a short link. Nothing is sent otherwise.%s\n' "$D" "$X"
+  printf '\n  %s%ss%s share and copy the link   %s%so%s share and open it   %sany other key: done%s ' "$B" "$C" "$X" "$B" "$C" "$X" "$D" "$X"
   IFS= read -rsn1 -t 60 k || true
   case $k in
-    o|O) if open "$1" 2>/dev/null; then printf '\r\033[K  %sOpened in your browser.%s\n' "$G" "$X"; else printf '\r\033[K  Could not open a browser. The link is above.\n'; fi ;;
-    c|C) if printf '%s' "$1" | pbcopy 2>/dev/null; then printf '\r\033[K  %sCopied. Paste it into a post.%s\n' "$G" "$X"; else printf '\r\033[K  Could not copy. The link is above.\n'; fi ;;
-    *) printf '\r\033[K' ;;
+    s|S|o|O) ;;
+    *) printf '\r\033[K'; return 0 ;;
+  esac
+  printf '\r\033[K  %sUploading the card...%s' "$D" "$X"
+  if ! url=$(card_upload); then
+    printf '\r\033[K  Could not upload the card (no network, or the site is down). Nothing was shared.\n'
+    return 0
+  fi
+  printf '\r\033[K  %s%sYour card:%s \033]8;;%s\033\\%s\033[4m%s%s\033]8;;\033\\\n' "$G" "$B" "$X" "$url" "$C" "$url" "$X"
+  case $k in
+    s|S) if printf '%s' "$url" | pbcopy 2>/dev/null; then printf '  %sCopied. Paste it into a post and it shows as a picture of the card.%s\n' "$D" "$X"; fi ;;
+    o|O) open "$url" 2>/dev/null || printf '  Could not open a browser. The link is above.\n' ;;
   esac
 }
-# The public link for --card: counts only (score, grade, sessions, agent memory, leftovers, findings, memory size, chip).
-card_link() {
+# The numbers on the card, as the JSON body the site expects (the same keys as the old long link).
+card_json() {
   local chip findings
   chip=$(printf '%s' "${OSINFO#*, }" | sed 's/^Apple //' | tr ' ' '-' | tr -cd 'A-Za-z0-9-' | cut -c1-24)
   findings=$(printf '%s' "$NOTES" | awk -F'\t' '$1 <= 2' | wc -l | tr -d ' ')
-  printf '%s/c?s=%s&g=%s&a=%s&m=%s&l=%s&f=%s&r=%s&c=%s&v=%s&utm_source=card&utm_medium=share&utm_campaign=doctor-card\n' \
-    "${YARE_DOCTOR_SITE:-https://meetyare.vercel.app}" "$HSCORE" "$HGRADE" "$SESS_N" "${AG_MB:-0}" "${LEFT_N:-0}" "$findings" "$MEM_GB" "$chip" "$VERSION"
+  printf '{"s":%d,"g":"%s","a":%d,"m":%d,"l":%d,"f":%d,"r":%d,"c":"%s","v":"%s"}' \
+    "$HSCORE" "$HGRADE" "$SESS_N" "${AG_MB:-0}" "${LEFT_N:-0}" "$findings" "${MEM_GB:-0}" "$chip" "$VERSION"
+}
+# Upload the card; prints its short link. Fails (non-zero) on any network or server error.
+card_upload() {
+  local res url
+  res=$(curl -fsS --max-time 15 -X POST -H 'Content-Type: application/json' --data "$(card_json)" \
+    "${YARE_DOCTOR_SITE:-https://meetyare.vercel.app}/api/cards?utm_source=card" 2>/dev/null) || return 1
+  url=$(printf '%s' "$res" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')
+  case $url in https://*|http://localhost*) printf '%s\n' "$url" ;; *) return 1 ;; esac
 }
 
 # ---- --awards: fun superlatives for the sessions ----
@@ -2315,7 +2326,7 @@ EOF
   overloaded           load average at or above the number of cores AND half the CPU in use (a high load with a quiet CPU is only noted)
   health score         100, minus 20 per "act on it" and 7 per "worth a look" (A 90, B 80, C 70, D 55)
 EOF
-  printf '\n%sAll of this is read-only: ps, sysctl, pmset, vm_stat, ioreg, tmutil (status), lsof (listing). No network, no files.%s\n' "$D" "$X"
+  printf '\n%sAll of this is read-only: ps, sysctl, pmset, vm_stat, ioreg, tmutil (status), lsof (listing). No files written; no network (sharing a card is the one exception, and only when you press s).%s\n' "$D" "$X"
 }
 
 # ---- --tree [LABEL]: every process a session started, as a tree ----
@@ -2695,7 +2706,7 @@ tab_help() {
   printf '  %s%-22s%s %s\n' "$B" "yare-doctor why 1234" "$X" "who started process 1234"
   printf '  %s%-22s%s %s\n' "$B" "yare-doctor share" "$X" "one line of counts to paste"
   printf '  %s%-22s%s %s\n' "$B" "yare-doctor help all" "$X" "every option"
-  printf '\n'; tab_para "Read-only: no network, nothing written, nothing stopped. Something missed? Run yare-doctor capture and send the output."
+  printf '\n'; tab_para "Read-only: nothing written, nothing stopped, no network unless you share a card. Something missed? Run yare-doctor capture and send the output."
 }
 tabs_render() {
   local i fn
