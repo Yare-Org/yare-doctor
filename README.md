@@ -40,7 +40,7 @@ It is about 2,000 lines of bash. **Read it before you run it**; that is what it 
 Colour and bars in a terminal; plain text when piped or with `--no-color`. This is the top of a real report on a Mac with four agent sessions, run with `--redact` (folder names hidden):
 
 ```text
-yare-doctor  0.2.1 · read-only · nothing was changed
+yare-doctor  0.2.2 · read-only · nothing was changed
 ──────────────────────────────────────────────────────────────────────────────────────────────────
 
   Mac       Apple M3 Max · 14 cores · 36 GB · macOS 27.2 · up 7 days

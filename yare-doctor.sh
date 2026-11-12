@@ -6,7 +6,7 @@
 #
 # What it does that Activity Monitor does not: it follows the parent chain of every process, so it can say which agent
 # session started what, how much of the Mac each session is holding, who is using the CPU, and what was left behind.
-VERSION="0.2.1"; RELEASED="2026-11-11"
+VERSION="0.2.2"; RELEASED="2026-11-11"
 set -u
 # cron and launchd start scripts with almost no environment: make sure HOME and the system tool folders exist
 if [ -z "${HOME:-}" ]; then HOME=$(dscl . -read "/Users/$(id -un)" NFSHomeDirectory 2>/dev/null | awk '{ print $2 }'); HOME=${HOME:-/var/root}; export HOME; fi
@@ -2211,11 +2211,25 @@ card() {
   if (( ON )) && [ -t 1 ]; then
     # OSC 8 makes the whole link one clickable target (iTerm2, Ghostty, WezTerm, kitty, VS Code, Warp); terminals
     # without it just show the plain URL, which they usually still open on cmd+click
-    printf '\033]8;;%s\033\\%s\033[4m%s%s\033]8;;\033\\  %s(cmd+click to open)%s\n' "$link" "$C" "$link" "$X" "$D" "$X"
+    printf '\033]8;;%s\033\\%s\033[4m%s%s\033]8;;\033\\\n' "$link" "$C" "$link" "$X"
   else
     printf '%s\n' "$link"
   fi
   printf '%sThe link holds these counts only: no names, paths or commands. Nothing is sent; you choose whether to post it.%s\n' "$D" "$X"
+  card_keys "$link"
+}
+# In a terminal, one key opens the card page or copies the link, so nobody has to click a long URL (Terminal.app only
+# opens links on cmd+double-click). Only on a key press, never on its own; anything else, or 60 s, just finishes.
+card_keys() {
+  [ -t 0 ] && [ -t 1 ] && [ -z "$FROM_FILE" ] || return 0
+  local k=""
+  printf '\n  %s%so%s open it in your browser   %s%sc%s copy the link   %sany other key: done%s ' "$B" "$C" "$X" "$B" "$C" "$X" "$D" "$X"
+  IFS= read -rsn1 -t 60 k || true
+  case $k in
+    o|O) if open "$1" 2>/dev/null; then printf '\r\033[K  %sOpened in your browser.%s\n' "$G" "$X"; else printf '\r\033[K  Could not open a browser. The link is above.\n'; fi ;;
+    c|C) if printf '%s' "$1" | pbcopy 2>/dev/null; then printf '\r\033[K  %sCopied. Paste it into a post.%s\n' "$G" "$X"; else printf '\r\033[K  Could not copy. The link is above.\n'; fi ;;
+    *) printf '\r\033[K' ;;
+  esac
 }
 # The public link for --card: counts only (score, grade, sessions, agent memory, leftovers, findings, memory size, chip).
 card_link() {

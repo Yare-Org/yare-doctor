@@ -2,6 +2,10 @@
 
 Versions follow [semver](https://semver.org). The 0.x line means the output format and options can still change.
 
+## 0.2.2 (2026-11-11)
+
+- Under `yare-doctor card`, press `o` to open the share page in your browser or `c` to copy the link. Terminal.app only opens links on cmd+double-click, so this works the same in every terminal. Nothing happens unless you press one of those keys; any other key, or 60 seconds, just finishes. When the output is piped there is no prompt.
+
 ## 0.2.1 (2026-11-11)
 
 - The share link under `yare-doctor card` is a clickable hyperlink in the terminal: cmd+click opens it (iTerm2, Ghostty, WezTerm, kitty, VS Code, Warp; other terminals show the plain link). When piped, it is the plain link as before.
