@@ -2,6 +2,11 @@
 
 Versions follow [semver](https://semver.org). The 0.x line means the output format and options can still change.
 
+## 0.3.1 (2026-11-14)
+
+- Sharing a card works again. The site moved to meetyare.dev, and the old address now redirects; 0.3.0 didn't follow the redirect, so pressing `s` said the upload failed. The upload now goes to meetyare.dev and follows the site's redirects, over https only.
+- Links in the output point at meetyare.dev.
+
 ## 0.3.0 (2026-11-11)
 
 Short share links for the card.

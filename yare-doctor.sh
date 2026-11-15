@@ -6,7 +6,7 @@
 #
 # What it does that Activity Monitor does not: it follows the parent chain of every process, so it can say which agent
 # session started what, how much of the Mac each session is holding, who is using the CPU, and what was left behind.
-VERSION="0.3.0"; RELEASED="2026-11-11"
+VERSION="0.3.1"; RELEASED="2026-11-14"
 set -u
 # cron and launchd start scripts with almost no environment: make sure HOME and the system tool folders exist
 if [ -z "${HOME:-}" ]; then HOME=$(dscl . -read "/Users/$(id -un)" NFSHomeDirectory 2>/dev/null | awk '{ print $2 }'); HOME=${HOME:-/var/root}; export HOME; fi
@@ -694,7 +694,7 @@ compressed_gb() { vm_stat 2>/dev/null | awk '/page size of/ { for (i = 1; i <= N
 timemachine() { tmutil status 2>/dev/null | awk '/Running/ { v = $3; gsub(/;/, "", v); r = v } /Percent/ { p = $3; gsub(/[";]/, "", p) } END { if (r == 1) printf "%s", (p + 0 > 0 ? sprintf("%d", p * 100) : "?") }'; }
 limits() { echo "$(sysctl -n kern.num_files 2>/dev/null || echo 0) $(sysctl -n kern.maxfiles 2>/dev/null || echo 0) $(sysctl -n kern.maxproc 2>/dev/null || echo 0)"; }
 
-LINK="https://meetyare.vercel.app/?utm_source=doctor&utm_medium=tool&utm_campaign=output"
+LINK="https://meetyare.dev/?utm_source=doctor&utm_medium=tool&utm_campaign=output"
 
 share_line() { # $1 = extra text
   echo "Yare doctor v$VERSION ($OSINFO): $CPUS cores, ${MEM_GB} GB. Agents: $(agent_list) in ${SESS_N} sessions, using ${AG_PCT}% of CPU and ${AG_MB} MB. Builds: $B_AGENT started by agents, $B_OWN not. Load ${LOAD:-?}, swap ${SWAP:-?}, ${LEFT_N} possible leftovers, ${IDLE_N} idle helpers (${IDLE_MB} MB), ${DUP_N} repeated helpers, ${PORT_N} ports held, ${RUN_N} possible runaways, ${STUCK_N} suspended, ${FORGOT_N} forgotten sessions, ${AWAKE_N} sleep locks by agents, ${SHARED_N} shared folders.${1:-}"
@@ -2245,8 +2245,9 @@ card_json() {
 # Upload the card; prints its short link. Fails (non-zero) on any network or server error.
 card_upload() {
   local res url
-  res=$(curl -fsS --max-time 15 -X POST -H 'Content-Type: application/json' --data "$(card_json)" \
-    "${YARE_DOCTOR_SITE:-https://meetyare.vercel.app}/api/cards?utm_source=card" 2>/dev/null) || return 1
+  # -L with --proto-redir: follow the site's redirects (a 308 keeps the POST), but only to https
+  res=$(curl -fsSL --proto-redir '=https' --max-time 15 -X POST -H 'Content-Type: application/json' --data "$(card_json)" \
+    "${YARE_DOCTOR_SITE:-https://meetyare.dev}/api/cards?utm_source=card" 2>/dev/null) || return 1
   url=$(printf '%s' "$res" | sed -n 's/.*"url":"\([^"]*\)".*/\1/p')
   case $url in https://*|http://localhost*) printf '%s\n' "$url" ;; *) return 1 ;; esac
 }

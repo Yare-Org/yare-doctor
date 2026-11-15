@@ -113,7 +113,7 @@ Processes that no longer have a parent (a dev server an agent left running, or a
 ## What it does not do
 
 - It does not change anything. It uses only `ps`, `sysctl`, `memory_pressure`, `pmset`, `df`, `sw_vers`, `vm_stat`, `ioreg`, `tmutil status` and `lsof` (which only lists open ports and never connects).
-- It makes **no network calls** unless you share a card: under `yare-doctor card`, pressing `s` (or `o`) uploads only the numbers on the card (score, grade, sessions, agent memory, leftovers, findings, chip, memory size, version) to meetyare.vercel.app and gives you a short link. Nothing else is ever sent, and nothing is sent unless you press that key. It writes **no files**. Besides printing and that upload, the only thing it does is the optional `--notify`, which shows a macOS notification. It does not stop or kill any process (for leftovers it only prints a `kill PID` hint for you to use yourself).
+- It makes **no network calls** unless you share a card: under `yare-doctor card`, pressing `s` (or `o`) uploads only the numbers on the card (score, grade, sessions, agent memory, leftovers, findings, chip, memory size, version) to meetyare.dev and gives you a short link. Nothing else is ever sent, and nothing is sent unless you press that key. It writes **no files**. Besides printing and that upload, the only thing it does is the optional `--notify`, which shows a macOS notification. It does not stop or kill any process (for leftovers it only prints a `kill PID` hint for you to use yourself).
 - `--share` output contains counts only: no paths, user names or command lines. The on-screen report does print process names (for example `node twitter-server`), so look before you paste a screenshot.
 
 ## Limits, stated plainly
@@ -124,6 +124,6 @@ Processes that no longer have a parent (a dev server an agent left running, or a
 
 ## About
 
-Made by the team building **Yare**, an early, unreleased prototype Mac tool for people who run several coding agents at once. We built this script to see what the problem actually looks like on real machines, and we have not measured a speed-up. If you run 2+ agents and want to tell us what slows your Mac down, we would like to hear it: open an issue, or join the waitlist at <https://meetyare.vercel.app/?utm_source=github&utm_medium=readme&utm_campaign=doctor>.
+Made by the team building **Yare**, an early, unreleased prototype Mac tool for people who run several coding agents at once. We built this script to see what the problem actually looks like on real machines, and we have not measured a speed-up. If you run 2+ agents and want to tell us what slows your Mac down, we would like to hear it: open an issue, or join the waitlist at <https://meetyare.dev/?utm_source=github&utm_medium=readme&utm_campaign=doctor>.
 
 MIT licensed.
